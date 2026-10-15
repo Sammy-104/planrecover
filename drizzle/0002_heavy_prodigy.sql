@@ -1,0 +1,1 @@
+ALTER TABLE `trip_links` ADD `role` text DEFAULT 'editor' NOT NULL;

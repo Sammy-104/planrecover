@@ -1,0 +1,15 @@
+{
+  "name": "planrecover-paypal-relay",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/relay.test.mjs",
+    "test:integration": "node --experimental-transform-types --disable-warning=ExperimentalWarning tests/inbox.integration.mjs",
+    "check": "node --check worker.mjs",
+    "dev": "wrangler dev --local --ip 127.0.0.1 --port 5190",
+    "build": "wrangler deploy --dry-run --outdir dist",
+    "prepare:online": "node scripts/prepare-online.mjs"
+  },
+  "devDependencies": {"wrangler": "4.92.0"},
+  "engines": {"node": ">=22"}
+}

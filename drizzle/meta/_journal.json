@@ -1,0 +1,125 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1791337894671,
+      "tag": "0000_ambiguous_spirit",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1791395012036,
+      "tag": "0001_parched_silvermane",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1791424443357,
+      "tag": "0002_heavy_prodigy",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1791502001500,
+      "tag": "0003_brief_shaman",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1791859021347,
+      "tag": "0004_pretty_lester",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1791859603972,
+      "tag": "0005_dusty_thor",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1791859644049,
+      "tag": "0006_spooky_blink",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1791990735262,
+      "tag": "0007_receipt_drafts",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1791990774290,
+      "tag": "0008_provider_reconciliation",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1791990906696,
+      "tag": "0009_ai_usage_limits",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1791993034637,
+      "tag": "0010_complete_backend",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1791993404844,
+      "tag": "0011_invoice_refund_evidence",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1791994557264,
+      "tag": "0012_background_jobs",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "6",
+      "when": 1791995760536,
+      "tag": "0013_planning_evidence_jobs_cursor",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "6",
+      "when": 1792024178740,
+      "tag": "0014_recovery_execution",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "6",
+      "when": 1792101897436,
+      "tag": "0015_backend_expansion",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "6",
+      "when": 1792102394163,
+      "tag": "0016_conversation_context",
+      "breakpoints": true
+    }
+  ]
+}

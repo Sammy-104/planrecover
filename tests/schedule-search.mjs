@@ -1,0 +1,27 @@
+import assert from 'node:assert/strict';
+import {initialState,applyAction} from '../lib/model.ts';
+import {previewMove,scheduleConnections,scheduleLocked,scheduleDay} from '../lib/schedule.ts';
+import {placeMatchScore,rankPlaces,searchRadius} from '../lib/place-match.ts';
+import {photonPlaces,searchMappedPlaces} from '../lib/place-search.ts';
+import {searchCities} from '../lib/city-search.ts';
+let state=applyAction(initialState(),{type:'create_trip',actor:'sam',plan:{name:'Rearranging',destination:'Toronto, Ontario, Canada',start:'2027-04-04',end:'2027-04-06',timezone:'America/Toronto',budget:30000}});
+for(const [name,hour]of [['Museum','10'],['Cafe','12'],['Games','14']])state=applyAction(state,{type:'add_item',actor:'sam',name,category:'Activity',start:`2027-04-04T${hour}:00:00-04:00`,duration:60,price:1000,participants:['sam','alex'],location:'Toronto'});
+for(const item of state.items){Object.assign(item,{latitude:43.66,longitude:-79.39,locationSourceUrl:'https://www.openstreetmap.org/node/1'});item.status='scheduled';item.approvals=['sam','alex'];}
+const [museum,cafe,games]=state.items;
+const moved=applyAction(state,{type:'move_item',actor:'sam',itemId:games.id,day:'2027-04-04',beforeId:museum.id,travelMode:'walk'});
+assert.deepEqual(moved.items.map(i=>i.name),state.items.map(i=>i.name),'Item identity is stable');assert.equal(moved.items[2].start,'2027-04-04T10:00:00-04:00');assert.equal(moved.items[0].start,'2027-04-04T11:05:00-04:00');assert.equal(moved.items[1].start,'2027-04-04T12:10:00-04:00');
+assert.ok(moved.items.every(i=>i.revision===2&&i.status==='draft'&&!i.approvals.length));assert.deepEqual(moved.items.map(i=>[i.price,i.shares,i.locationSourceUrl,i.latitude,i.longitude]),state.items.map(i=>[i.price,i.shares,i.locationSourceUrl,i.latitude,i.longitude]));assert.deepEqual(moved.events,state.events);assert.equal(moved.plan.scheduleTravelMode,'walk');assert.ok(scheduleConnections(moved,'2027-04-04').every(c=>!c.overlap&&!c.tight));
+assert.deepEqual(previewMove(state,games.id,'2027-04-04',null),[]);assert.deepEqual(previewMove(state,cafe.id,'2027-04-04',cafe.id),[]);
+const another=applyAction(state,{type:'move_item',actor:'alex',itemId:cafe.id,day:'2027-04-05',beforeId:null,travelMode:'drive'});assert.equal(scheduleDay(another.items[1],'America/Toronto'),'2027-04-05');assert.equal(another.items[0].start,museum.start);assert.equal(another.plan.scheduleTravelMode,'drive');
+const locked=structuredClone(state);locked.items[1].booking='demo-confirmed';assert.ok(scheduleLocked(locked.items[1]));assert.throws(()=>previewMove(locked,games.id,'2027-04-04',museum.id),/confirmed time stays fixed/);assert.throws(()=>previewMove(locked,cafe.id,'2027-04-05'),/fixed time/);
+const paid=structuredClone(state);paid.items[0].paid=['sam'];assert.throws(()=>previewMove(paid,museum.id,'2027-04-05'),/fixed time/);assert.throws(()=>previewMove(state,museum.id,'2027-04-08'),/within this plan/);assert.throws(()=>previewMove(state,museum.id,'2027-04-04','wrong-plan-id'),/target activity changed/);assert.throws(()=>previewMove(state,museum.id,'2027-04-05',null,'plane'),/walking or driving/);
+const late=structuredClone(state);late.items[0].duration=1440;assert.throws(()=>previewMove(late,games.id,'2027-04-04',museum.id),/do not fit/);
+const overlaps=structuredClone(state);overlaps.items[1].start='2027-04-04T10:30:00-04:00';assert.ok(scheduleConnections(overlaps,'2027-04-04').some(c=>c.overlap));
+const tokyo=structuredClone(state);tokyo.plan.timezone='Asia/Tokyo';tokyo.items[0].start='2027-04-04T01:00:00Z';assert.equal(scheduleDay(tokyo.items[0],tokyo.plan.timezone),'2027-04-04');const japan=previewMove(tokyo,museum.id,'2027-04-05');assert.ok(japan.find(c=>c.itemId===museum.id).start.endsWith('+09:00'));
+assert.equal(placeMatchScore('Royal Ontario Museum','royal ontaro','Toronto')<10,true);assert.equal(placeMatchScore('Royal Ontario Museum','ontario royal','Toronto')<10,true);assert.equal(placeMatchScore('Royal York','royal ontario','Toronto'),undefined);
+const city=(await searchCities('Toronto'))[0],feature=(id,name,lat)=>({properties:{osm_type:'N',osm_id:id,osm_key:'shop',osm_value:'games',name,city:'Toronto'},geometry:{type:'Point',coordinates:[city.longitude,lat]}});
+const features={features:[feature(801,'Niche North',city.latitude+.01),feature(802,'Niche North',city.latitude+.4),feature(803,'Niche North',city.latitude+1.5)]};
+assert.equal(photonPlaces(features,city,20).length,1);assert.equal(photonPlaces(features,city,50).length,2);assert.equal(photonPlaces(features,city,100).length,2);assert.throws(()=>searchRadius(999),/Choose a search area/);
+const broad=photonPlaces(features,city,100);assert.equal(rankPlaces(broad,'niche',city.name,city,100)[0].id,'osm-node-801');let requests=0;
+const provider=async()=>{requests++;return requests===1?new Response('Unavailable',{status:503}):Response.json(features);};const first=await searchMappedPlaces(city.label,city,'niche','https://retry-test.example',provider,{radiusKm:50});assert.equal(first.unavailable,true);const retry=await searchMappedPlaces(city.label,city,'niche','https://retry-test.example',provider,{radiusKm:50,refresh:true});assert.equal(retry.unavailable,false);assert.equal(retry.places.length,2);assert.equal(requests,2);
+console.log('Schedule/search checks: reorder and cross-day moves, travel gaps, local time zones, overlap detection, confirmed/paid locks, unchanged money and pins, revised approvals, bad scope/dates, typo ranking, wide bounds, distance ranking and outage retry passed.');

@@ -1,0 +1,13 @@
+{
+  "applicationSourceCommit": "8bd3ed44d97fea2948234eccaa1f4f4ca2f909ab",
+  "applicationSiteVersion": 14,
+  "standaloneRelay": "services/paypal-relay",
+  "excluded": [
+    "credentials",
+    "runtime state",
+    "provider data",
+    "generated builds",
+    "historical checkouts",
+    "synced source attachments"
+  ]
+}

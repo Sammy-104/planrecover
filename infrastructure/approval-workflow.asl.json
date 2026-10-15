@@ -1,0 +1,17 @@
+{
+  "Comment": "Provision only after checking the owner's AWS cost policy. Replace the Activity ARN with the configured Canada Central STANDARD activity. This workflow records approval; payment execution stays explicit in PlanRecover.",
+  "StartAt": "AwaitReviewedApproval",
+  "States": {
+    "AwaitReviewedApproval": {
+      "Type": "Task",
+      "Resource": "${ApprovalActivityArn}",
+      "TimeoutSeconds": 86400,
+      "Next": "RequireExplicitExecution"
+    },
+    "RequireExplicitExecution": {
+      "Type": "Pass",
+      "Result": {"approvalRecorded": true, "paymentAuthorized": false, "nextStep": "Review and execute in PlanRecover"},
+      "End": true
+    }
+  }
+}
