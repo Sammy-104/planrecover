@@ -13,13 +13,13 @@ try {
   console.log('PASS independent SDK client connects over Streamable HTTP');
   const discovered=await client.listTools();
   assert.deepEqual(discovered.tools.filter(t=>['get_decisions','get_my_money','get_plan','list_plans'].includes(t.name)).map(t=>t.name).sort(),['get_decisions','get_my_money','get_plan','list_plans']);
-  assert.equal(discovered.tools.length,9);
+  assert.equal(discovered.tools.length,10);
   assert.ok(discovered.tools.filter(t=>t.name.startsWith('prepare_')).every(t=>t.annotations?.readOnlyHint===false));
   const resources=await client.listResources();
   assert.ok(resources.resources.some(r=>r.uri==='planrecover://skills/planning'));
   const skill=await client.readResource({uri:'planrecover://skills/planning'});
   assert.match(skill.contents[0].text,/refunds cannot fund a payment/i);
-  console.log('PASS four read-only tools and planning Agent Skill discovered');
+  console.log('PASS ten planning tools and planning Agent Skill discovered');
   const call=async(name,args)=>{
     const result=await client.callTool({name,arguments:args});
     assert.notEqual(result.isError,true,`${name} failed`);

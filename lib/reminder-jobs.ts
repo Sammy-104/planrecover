@@ -3,8 +3,9 @@ import {defaultPlanningPreferences,planningPreferencesSchema,type PlanningPrefer
 import type {State} from './model.ts';
 import type {Identity} from './people.ts';
 import {z} from 'zod';
+import {providerConfig} from './http-adapters.ts';
 
-type Source={kind:'task'|'item-deadline'|'reminder'|'invoice';id:string;due:number;title:string;body:string;members:string[];invoiceVersion:number};
+type Source={kind:'task'|'item-deadline'|'reminder'|'invoice'|'quote-expiry'|'supplier-quote'|'policy-cutoff'|'unpaid-share';id:string;due:number;title:string;body:string;members:string[];invoiceVersion:number};
 type InvoiceRow={id:string;member_id:string;terms:string;version:number;status:string;amount:number;paid:number};
 type Job={id:string;owner:string;plan_id:string;member_id:string;source_kind:Source['kind'];source_id:string;source_due_at:number;
  title:string;body:string;timezone:string;lead_minutes:number;channel:'in-app'|'email'|'push';due_at:number;plan_version:number;
@@ -12,6 +13,7 @@ type Job={id:string;owner:string;plan_id:string;member_id:string;source_kind:Sou
 const instantSchema=z.string().datetime({offset:true});
 const instant=(value:unknown):number|null=>typeof value==='string'&&instantSchema.safeParse(value).success&&Number.isFinite(Date.parse(value))?Date.parse(value):null;
 const iso=(now:number)=>new Date(now).toISOString();
+function invoiceItemId(invoice:InvoiceRow){try{return JSON.parse(invoice.terms)?.itemId;}catch{return undefined;}}
 async function stableId(values:unknown[]){const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify(values)));return 'reminder-'+Array.from(new Uint8Array(bytes),value=>value.toString(16).padStart(2,'0')).join('');}
 
 function sources(state:State,invoices:InvoiceRow[],members:Set<string>):Source[]{
@@ -21,6 +23,8 @@ function sources(state:State,invoices:InvoiceRow[],members:Set<string>):Source[]
   const targets=(item.category==='Preparation'&&item.taskOwner?[item.taskOwner]:item.participants).filter(member=>members.has(member));
   if(item.category==='Preparation'&&!item.done){const due=instant(item.start);if(due!==null)result.push({kind:'task',id:item.id,due,title:item.name,body:'Scheduled preparation task. Review the plan for details.',members:targets,invoiceVersion:-1});}
   const due=instant(item.deadline);if(due!==null)result.push({kind:'item-deadline',id:item.id,due,title:`Deadline: ${item.name}`,body:'Stored item deadline. Check the saved supplier terms before taking action.',members:targets,invoiceVersion:-1});
+  const expires=instant(item.expires);if(expires!==null&&!['confirmed','demo-confirmed'].includes(item.booking))result.push({kind:'quote-expiry',id:item.id,due:expires,title:`Quote expires: ${item.name}`,body:'Review the saved quote before its expiry. This reminder cannot approve or pay.',members:targets,invoiceVersion:-1});
+  if(item.status==='awaiting-payment'){const at=instant(item.deadline??item.start);if(at!==null){const unpaid=targets.filter(member=>!item.paid.includes(member)&&!invoices.some(invoice=>invoice.member_id===member&&invoiceItemId(invoice)===item.id&&!['cancelled','closed','refunded'].includes(invoice.status)));if(unpaid.length)result.push({kind:'unpaid-share',id:item.id,due:at,title:`Unpaid share: ${item.name}`,body:item.deadline?'Review your approved outstanding share before the saved deadline.':'This activity is approaching and your approved share is unpaid. The activity start is not a supplier payment cutoff.',members:unpaid,invoiceVersion:-1});}}
  }
  for(const reminder of state.reminders){
   const item=state.items.find(item=>item.id===reminder.itemId),due=instant(reminder.due);
@@ -53,8 +57,12 @@ export async function syncPlanReminders(database:D1Database,owner:string,state:P
   const memberRows=await database.prepare("SELECT member_id FROM plan_members WHERE owner=? AND plan_id=? AND role<>'legacy'").bind(owner,planId).all<{member_id:string}>();
   const prefRows=await database.prepare('SELECT member_id,body,version FROM member_planning_preferences WHERE owner=? AND plan_id=?').bind(owner,planId)
    .all<{member_id:string;body:string;version:number}>();
-  const invoices=await database.prepare('SELECT id,member_id,terms,version,status,amount,paid FROM plan_invoices WHERE owner=? AND plan_id=?').bind(owner,planId).all<InvoiceRow>();
+  const invoices=await database.prepare('SELECT id,member_id,terms,version,COALESCE(lifecycle_status,status) AS status,amount,paid FROM plan_invoices WHERE owner=? AND plan_id=?').bind(owner,planId).all<InvoiceRow>();
   const allSources=sources(canonical,invoices.results,new Set(memberRows.results.map(member=>member.member_id))),jobs:Job[]=[];
+  const policies=await database.prepare('SELECT id,body FROM booking_policies WHERE owner=? AND plan_id=? ORDER BY created DESC,id DESC LIMIT 100').bind(owner,planId).all<{id:string;body:string}>(),seen=new Set<string>();
+  for(const row of policies.results){const p=JSON.parse(row.body),item=canonical.items.find(i=>i.id===p.itemId&&i.revision===p.itemRevision&&i.status!=='cancelled'),due=instant(p.cutoff);if(!item||seen.has(item.id))continue;seen.add(item.id);if(due!==null)allSources.push({kind:'policy-cutoff',id:row.id,due,title:`Cancellation cutoff: ${item.name}`,body:'Your saved confirmed cancellation policy reaches its cutoff. Review the exact terms before acting.',members:item.participants,invoiceVersion:-1});}
+  const quotes=await database.prepare("SELECT id,request,response FROM adapter_operations WHERE owner=? AND plan_id=? AND provider='supplier' AND kind='quote' AND status='completed' ORDER BY created DESC,id DESC LIMIT 100").bind(owner,planId).all<{id:string;request:string;response:string}>();seen.clear();
+  for(const row of quotes.results){const request=JSON.parse(row.request),quote=JSON.parse(row.response),item=canonical.items.find(i=>i.id===request.itemId&&i.revision===request.revision&&i.status!=='cancelled'),due=instant(quote.expiresAt);if(!item||seen.has(item.id)||!quote.available)continue;seen.add(item.id);if(due!==null&&!['confirmed','demo-confirmed'].includes(item.booking))allSources.push({kind:'supplier-quote',id:row.id,due,title:`Supplier quote expires: ${item.name}`,body:'The saved supplier quote expires at this instant. Availability must be checked again before booking.',members:item.participants,invoiceVersion:-1});}
   for(const source of allSources)for(const memberId of source.members){
    const stored=prefRows.results.find(pref=>pref.member_id===memberId),pref:PlanningPreferences=stored?planningPreferencesSchema.parse(JSON.parse(stored.body)):defaultPlanningPreferences(canonical.plan.timezone);
    for(const lead of pref.leadMinutes)for(const channel of ['in-app','email','push'] as const){
@@ -76,11 +84,11 @@ export async function syncPlanReminders(database:D1Database,owner:string,state:P
    database.prepare("UPDATE reminder_jobs SET status='cancelled',lease_token=NULL,lease_until=0,last_error='source-changed',updated=? WHERE owner=? AND plan_id=? AND status IN ('scheduled','processing','unavailable') AND id NOT IN (SELECT value FROM json_each(?))")
     .bind(iso(now),owner,planId,JSON.stringify(jobs.map(job=>job.id))),
   ];
-  for(const job of jobs)commands.push(database.prepare(`INSERT INTO reminder_jobs(id,owner,plan_id,member_id,source_kind,source_id,source_due_at,title,body,timezone,lead_minutes,channel,due_at,plan_version,preferences_version,invoice_version,status,last_error,created,updated)
-   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET plan_version=excluded.plan_version,preferences_version=excluded.preferences_version,invoice_version=excluded.invoice_version,
+  for(const job of jobs)commands.push(database.prepare(`INSERT INTO reminder_jobs(id,owner,plan_id,member_id,source_kind,source_type,source_id,source_due_at,title,body,timezone,lead_minutes,channel,due_at,plan_version,preferences_version,invoice_version,status,last_error,created,updated)
+   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET plan_version=excluded.plan_version,preferences_version=excluded.preferences_version,invoice_version=excluded.invoice_version,
     status=CASE WHEN reminder_jobs.status='cancelled' THEN excluded.status ELSE reminder_jobs.status END,
     last_error=CASE WHEN reminder_jobs.status='cancelled' THEN excluded.last_error ELSE reminder_jobs.last_error END,updated=excluded.updated`)
-   .bind(job.id,owner,planId,job.member_id,job.source_kind,job.source_id,job.source_due_at,job.title,job.body,job.timezone,job.lead_minutes,job.channel,job.due_at,
+   .bind(job.id,owner,planId,job.member_id,['task','item-deadline','reminder','invoice'].includes(job.source_kind)?job.source_kind:'reminder',job.source_kind,job.source_id,job.source_due_at,job.title,job.body,job.timezone,job.lead_minutes,job.channel,job.due_at,
     job.plan_version,job.preferences_version,job.invoice_version,job.status,job.last_error,iso(now),iso(now)));
   commands.push(database.prepare('DELETE FROM backend_write_guards WHERE id=?').bind(token));
   try{await database.batch(commands);return {scheduled:jobs.filter(job=>job.channel==='in-app').length,unavailable:jobs.filter(job=>job.channel!=='in-app').length};}
@@ -104,7 +112,9 @@ export const deliveryFence=`EXISTS(SELECT 1 FROM plans p JOIN plan_members m ON 
  WHERE p.owner=reminder_jobs.owner AND p.id=reminder_jobs.plan_id AND p.version=reminder_jobs.plan_version AND p.status<>'deleted'
  AND m.member_id=reminder_jobs.member_id AND m.role<>'legacy')
  AND COALESCE((SELECT version FROM member_planning_preferences x WHERE x.owner=reminder_jobs.owner AND x.plan_id=reminder_jobs.plan_id AND x.member_id=reminder_jobs.member_id),0)=reminder_jobs.preferences_version
- AND (reminder_jobs.source_kind<>'invoice' OR EXISTS(SELECT 1 FROM plan_invoices i WHERE i.id=reminder_jobs.source_id AND i.version=reminder_jobs.invoice_version AND i.status IN ('sent','partially-paid') AND i.paid<i.amount))`;
+ AND (COALESCE(reminder_jobs.source_type,reminder_jobs.source_kind)<>'invoice' OR EXISTS(SELECT 1 FROM plan_invoices i WHERE i.id=reminder_jobs.source_id AND i.version=reminder_jobs.invoice_version AND COALESCE(i.lifecycle_status,i.status) IN ('sent','partially-paid') AND i.paid<i.amount))
+ AND (COALESCE(reminder_jobs.source_type,reminder_jobs.source_kind)<>'policy-cutoff' OR EXISTS(SELECT 1 FROM booking_policies b WHERE b.id=reminder_jobs.source_id AND b.owner=reminder_jobs.owner AND NOT EXISTS(SELECT 1 FROM booking_policies newer WHERE newer.owner=b.owner AND newer.plan_id=b.plan_id AND newer.item_id=b.item_id AND (newer.created>b.created OR newer.created=b.created AND newer.id>b.id))))
+ AND (COALESCE(reminder_jobs.source_type,reminder_jobs.source_kind)<>'supplier-quote' OR EXISTS(SELECT 1 FROM adapter_operations a WHERE a.id=reminder_jobs.source_id AND a.status='completed' AND NOT EXISTS(SELECT 1 FROM adapter_operations newer WHERE newer.owner=a.owner AND newer.plan_id=a.plan_id AND newer.provider='supplier' AND newer.kind='quote' AND json_extract(newer.request,'$.itemId')=json_extract(a.request,'$.itemId') AND (newer.created>a.created OR newer.created=a.created AND newer.id>a.id))))`;
 
 /** Leased, fenced, retryable delivery. No external provider is called or claimed as sent. */
 export async function runDueReminderJobs(database:D1Database,options:{now?:number;limit?:number;leaseMs?:number;owner?:string}={}){
@@ -141,17 +151,17 @@ export async function runDueReminderJobs(database:D1Database,options:{now?:numbe
 
 export class ReminderRepository{
  private database:D1Database;
- constructor(database:D1Database){this.database=database;}
+ constructor(database:D1Database,private settings:Record<string,unknown>={}){this.database=database;}
  private async access(planId:string,identity:Identity){const row=await this.database.prepare(`SELECT p.owner,p.body FROM plans p JOIN plan_members m ON m.owner=p.owner AND m.plan_id=p.id
   WHERE p.id=? AND p.status<>'deleted' AND m.member_id=? AND m.role<>'legacy'`).bind(planId,identity.id).first<{owner:string;body:string}>();if(!row)throw missingPlan();return row;}
  async list(planId:string,identity:Identity){
   const plan=await this.access(planId,identity);await syncPlanReminders(this.database,plan.owner,JSON.parse(plan.body));
   const notifications=await this.database.prepare('SELECT id,title,body,created,read_at FROM plan_notifications WHERE owner=? AND plan_id=? AND member_id=? ORDER BY created DESC,id LIMIT 100')
    .bind(plan.owner,planId,identity.id).all<{id:string;title:string;body:string;created:string;read_at:string|null}>();
-  const jobs=await this.database.prepare("SELECT id,source_kind,source_id,source_due_at,title,timezone,lead_minutes,channel,due_at,status,last_error FROM reminder_jobs WHERE owner=? AND plan_id=? AND member_id=? AND status<>'cancelled' ORDER BY due_at,id LIMIT 200")
+  const jobs=await this.database.prepare("SELECT id,COALESCE(source_type,source_kind) AS source_kind,source_id,source_due_at,title,timezone,lead_minutes,channel,due_at,status,last_error FROM reminder_jobs WHERE owner=? AND plan_id=? AND member_id=? AND status<>'cancelled' ORDER BY due_at,id LIMIT 200")
    .bind(plan.owner,planId,identity.id).all();
   return {notifications:notifications.results.map(row=>({id:row.id,title:row.title,body:row.body,created:row.created,readAt:row.read_at})),jobs:jobs.results,
-   delivery:{inApp:'configured',email:'unconfigured',push:'unconfigured'}};
+   delivery:reminderDeliveryConfiguration(this.settings)};
  }
  async markRead(planId:string,identity:Identity,notificationId:string){
   const plan=await this.access(planId,identity),now=iso(Date.now());
@@ -162,3 +172,4 @@ export class ReminderRepository{
   return {read:true};
  }
 }
+export function reminderDeliveryConfiguration(settings:Record<string,unknown>={}){let connected=false;try{connected=!!providerConfig(settings,'NOTIFICATION');}catch{}return {inApp:'configured',email:connected?'configured':'unconfigured',push:connected?'configured':'unconfigured',configurationIsNotDeliveryVerification:true};}

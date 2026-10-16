@@ -7,6 +7,8 @@ import { createTestD1 } from './helpers/d1.mjs';
 import { PlanRepository } from '../lib/plan-repository.ts';
 import { initialState } from '../lib/model.ts';
 import { accountPersonId } from '../lib/people.ts';
+import { PlanChangeService } from '../lib/plan-changes.ts';
+import { replacementId } from '../lib/change-workflow.ts';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const require = createRequire(import.meta.url);
@@ -30,6 +32,10 @@ const entries = {
   sharing: 'app/api/trip-share/route.ts',
   mcp: 'app/mcp/route.ts',
   paypal: 'lib/paypal.ts',
+  collection: 'app/api/plans/[planId]/collection/route.ts',
+  invoiceRefunds: 'app/api/plans/[planId]/invoice-refunds/route.ts',
+  planningReview: 'app/api/plans/[planId]/review/route.ts',
+  merchantQuotes: 'app/api/plans/[planId]/merchant-quotes/route.ts',
 };
 const routes = {};
 let checks = 0;
@@ -191,8 +197,10 @@ try {
       account: accounts.bob, token: editor.token,
     }), context(planId)), 403);
     const bobPlan = await decoded(await routes.plan.GET(request(`/api/plans/${planId}`, 'GET', undefined, { account: accounts.bob }), context(planId)));
+    assert.equal(bobPlan.memberId,people.bob);
     assert.deepEqual(Object.keys(bobPlan.state.preferences), [people.bob]);
     const carolPlan = await decoded(await routes.plan.GET(request(`/api/plans/${planId}`, 'GET', undefined, { account: accounts.carol }), context(planId)));
+    assert.equal(carolPlan.memberId,people.carol);
     await decoded(await routes.plan.PATCH(request(`/api/plans/${planId}`, 'PATCH', {
       version: carolPlan.version, action: { type: 'plan', actor: people.alice, plan: { ...carolPlan.state.plan, name: 'Viewer overwrite' } },
     }, { account: accounts.carol }), context(planId)), 403);
@@ -401,7 +409,7 @@ try {
       return input;
     }
     const discovery = await decoded(await routes.mcp.POST(mcpRequest(message('tools/list'))));
-    assert.equal(discovery.result.tools.length, 9);
+    assert.equal(discovery.result.tools.length, 10);
     assert.equal((await database.prepare('SELECT count(*) AS count FROM workspaces').first()).count, 0, 'Public discovery does not create a saved workspace');
     const anonymous = await decoded(await routes.mcp.POST(mcpRequest(message('tools/call', { name: 'list_plans', arguments: {} }))), 401);
     assert.equal(anonymous.error.code, -32000);
@@ -412,6 +420,34 @@ try {
     assert.equal(result.result.isError, false);
     assert.equal(result.result.structuredContent.plan.name, 'Authenticated MCP route plan');
     assert.equal(result.result.structuredContent.preferences, undefined);
+  });
+
+  await check('Connected workflow routes require identity, plan access and strict explicit mutations', async database => {
+    const created=await createPlan('Connected route checks'),id=created.state.plan.id,base='/api/plans/'+id;
+    for(const [route,path] of [[routes.collection,'/collection'],[routes.invoiceRefunds,'/invoice-refunds']]){
+      await decoded(await route.GET(request(base+path,'GET',undefined,{account:null}),context(id)),401);
+      await decoded(await route.GET(request(base+path,'GET',undefined,{account:accounts.bob}),context(id)),404);
+      const saved=await decoded(await route.GET(request(base+path),context(id)));assert.ok(saved.checkouts||saved.requests);
+      await decoded(await route.POST(request(base+path,'POST',{}, {requestOrigin:'https://untrusted.example'}),context(id)),400);
+      await decoded(await route.POST(request(base+path,'POST',{}),context(id)),400);
+    }
+    await decoded(await routes.collection.POST(request(base+'/collection','POST',{changeId:crypto.randomUUID(),operationId:'other-order',confirm:true,actor:people.alice}),context(id)),400);
+    await decoded(await routes.invoiceRefunds.POST(request(base+'/invoice-refunds','POST',{action:'approve',id:crypto.randomUUID(),confirm:true,actor:people.alice}),context(id)),400);
+    await decoded(await routes.planningReview.POST(request(base+'/review','POST',{version:created.version,action:{type:'plan',plan:created.state.plan}},{account:null}),context(id)),401);
+    const before=database.sqlite.prepare('SELECT body FROM plans WHERE id=?').get(id).body;
+    const review=await decoded(await routes.planningReview.POST(request(base+'/review','POST',{version:created.version,action:{type:'add_item',name:'Review draft',category:'Activity',start:'2027-04-04T12:00:00-04:00',duration:60,price:1000,participants:[people.alice]}}),context(id)));
+    assert.equal(review.review.requiresReview,true);assert.equal(database.sqlite.prepare('SELECT body FROM plans WHERE id=?').get(id).body,before);
+    assert.equal(database.sqlite.prepare('SELECT COUNT(*) n FROM invoice_refund_requests').get().n,0);
+  });
+
+  await check('Recovery replacement quote keeps its workflow identity and requires fresh approvals before checkout', async database => {
+    const created=await createPlan('Replacement quote route'),id=created.state.plan.id,base='/api/plans/'+id;
+    await decoded(await routes.plan.PATCH(request(base,'PATCH',{version:created.version,action:{type:'add_item',name:'Unpaid original',category:'Activity',start:'2027-04-04T10:00:00-04:00',duration:60,price:1000,participants:[people.alice],location:'Toronto'}}),context(id)));
+    const repository=new PlanRepository(database),identity={id:people.alice,name:'Alice'},current=await repository.getPlan(id,identity),service=new PlanChangeService(database),change=await service.propose(id,identity,{type:'recovery',version:current.version,itemIds:[current.state.items[0].id],option:'replace',replacements:[{name:'Replacement estimate',category:'Activity',start:'2027-04-04T12:00:00-04:00',duration:60,price:1000,participants:[people.alice],location:'Toronto'}]});
+    await service.act(id,identity,{type:'approve',changeId:change.id,version:current.version,confirm:true});await service.act(id,identity,{type:'apply',changeId:change.id,version:current.version,confirm:true});
+    const fresh=await repository.getPlan(id,identity),itemId=replacementId(change.id,0),input={version:fresh.version,catalogId:'museum',start:'2027-04-04T12:00:00-04:00',participants:[people.alice],replacementItemId:itemId};
+    await decoded(await routes.merchantQuotes.POST(request(base+'/merchant-quotes','POST',input),context(id)),400);
+    const saved=await decoded(await routes.merchantQuotes.POST(request(base+'/merchant-quotes','POST',{...input,confirm:true}),context(id))),item=saved.state.items.find(i=>i.id===itemId);assert.equal(item.price,1600);assert.equal(item.revision,2);assert.deepEqual(item.approvals,[]);assert.match(item.source,/Seeded demo catalog/);assert.equal(saved.state.items.filter(i=>i.id===itemId).length,1);assert.equal(saved.state.events.length,0);assert.equal((await service.get(id,identity,change.id)).workflow.steps.find(s=>s.kind==='payment').status,'awaiting-approval');
   });
 
   await check('PayPal transport preserves exact webhook verification JSON and ordinary order serialization', async () => {

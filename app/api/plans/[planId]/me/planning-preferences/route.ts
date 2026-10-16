@@ -1,7 +1,8 @@
 import {checkOrigin,apiError,db} from '@/lib/store';
 import {planApiContext,privateHeaders} from '@/lib/plan-api';
 import {PlanningPreferencesRepository,parsePlanningPreferenceMutation} from '@/lib/planning-constraints';
-import {syncPlanReminders} from '@/lib/reminder-jobs';
+import {syncPlanReminders,reminderDeliveryConfiguration} from '@/lib/reminder-jobs';
+import {env} from 'cloudflare:workers';
 type Context={params:Promise<{planId:string}>};
 
 export async function GET(request:Request,context:Context){
@@ -15,6 +16,6 @@ export async function PATCH(request:Request,context:Context){
   const saved=await new PlanningPreferencesRepository(db()).update(planId,identity,input.preferences,input.version);
   const record=await repository.getPlan(planId,identity);let remindersSynced=true;
   try{await syncPlanReminders(db(),record.owner,record.state);}catch{remindersSynced=false;}
-  return Response.json({...saved,remindersSynced,delivery:{inApp:'configured',email:'unconfigured',push:'unconfigured'}},{headers:privateHeaders});
+  return Response.json({...saved,remindersSynced,delivery:reminderDeliveryConfiguration(env as unknown as Record<string,unknown>)},{headers:privateHeaders});
  }catch(error){return apiError(error);}
 }

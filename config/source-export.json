@@ -1,6 +1,6 @@
 {
-  "applicationSourceCommit": "8bd3ed44d97fea2948234eccaa1f4f4ca2f909ab",
-  "applicationSiteVersion": 14,
+  "applicationSourceCommit": "1071166a1a05e6c34538ed1507ac91435ae15c57",
+  "applicationSiteVersion": 16,
   "standaloneRelay": "services/paypal-relay",
   "excluded": [
     "credentials",
@@ -9,5 +9,7 @@
     "generated builds",
     "historical checkouts",
     "synced source attachments"
-  ]
+  ],
+  "previousApplicationSourceCommit": "8bd3ed44d97fea2948234eccaa1f4f4ca2f909ab",
+  "includes": "Site version 15 payment usability changes and all eight audited backend code fixes"
 }

@@ -3,7 +3,7 @@ import {localDateTime,zonedStart,tripDays} from './trip-time.ts';
 import {placeDistance} from './place-match.ts';
 export type TravelMode='walk'|'drive'|'transit';
 export function scheduleDay(item:Item,zone:string){return localDateTime(item.start,zone).slice(0,10);}
-export function scheduleLocked(item:Item){return item.category==='Accommodation'||item.category==='Preparation'||item.status==='cancelled'||item.booking==='demo-confirmed'||item.paid.length>0||item.status==='awaiting-payment';}
+export function scheduleLocked(item:Item){return item.category==='Accommodation'||item.category==='Preparation'||item.status==='cancelled'||['demo-confirmed','confirmed','pending'].includes(item.booking)||item.paid.length>0||item.status==='awaiting-payment';}
 export function travelEstimate(a:Item,b:Item,mode:TravelMode='walk'){const km=placeDistance(a,b);return {minutes:km===undefined?15:Math.max(5,Math.ceil((km*1.3/(mode==='drive'?30:4.5)*60+(mode==='drive'?10:3))/5)*5),known:km!==undefined,km};}
 export function dayItems(state:State,day:string){return state.items.filter(i=>scheduleDay(i,state.plan.timezone)===day).sort((a,b)=>Date.parse(a.start)-Date.parse(b.start));}
 export function scheduleConnections(state:State,day:string,mode:TravelMode='walk'){

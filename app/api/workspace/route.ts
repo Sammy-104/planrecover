@@ -6,6 +6,7 @@ import { parseWorkspaceMutation } from '@/lib/action-contracts';
 import { PlanRepository } from '@/lib/plan-repository';
 import { BackendError, conflict } from '@/lib/backend-errors';
 import { requireReviewedReceiptDraft } from '@/lib/receipt-drafts';
+import {reviewPlanAction} from '@/lib/planning-review';
 
 export async function GET(request:Request) {
   try {
@@ -32,6 +33,7 @@ export async function POST(request:Request) {
       if(!fileKey.startsWith(`${prefix}/`))throw new BackendError('RECEIPT_ACCESS','This receipt attachment is unavailable.',403);
       await requireReviewedReceiptDraft(db(),access.id,current.plan.id!,action.receipt as Receipt);
     }
+    const review=current.people?await reviewPlanAction(db(),await new PlanRepository(db()).getPlan(current.plan.id!,access.user!),access.user!.id,action):null;
     let state;
     if(action.type==='preferences'&&current.people) {
       const repository=new PlanRepository(db());
@@ -46,7 +48,7 @@ export async function POST(request:Request) {
       }
       state=await saveAccess(access,next,parsed.version);
     }
-    return Response.json({state:publicState(state,access),collaboration:await collaboration(access,state)},
+    return Response.json({state:publicState(state,access),collaboration:await collaboration(access,state),review},
       {headers:{'Cache-Control':'private, no-store'}});
   } catch(error) {return apiError(error);}
 }

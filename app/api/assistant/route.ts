@@ -10,6 +10,7 @@ import {invoiceJson} from '@/lib/plan-invoices';
 import {BackendError,conflict,missingPlan} from '@/lib/backend-errors';
 import {loadPlanningPreferences} from '@/lib/planning-constraints';
 import {isDemoTrip} from '@/lib/model';
+import {savedToolResults} from '@/lib/agent-checkpoints';
 export async function POST(request:Request){let conversationLease:{id:string;token:string}|undefined;const conversations=new ConversationRepository(db());try{
  checkOrigin(request);const access=await workspaceAccess(request);
  if(!access.user)throw new BackendError('AUTH_REQUIRED','Sign in to chat about your saved plans.',401);
@@ -33,17 +34,17 @@ export async function POST(request:Request){let conversationLease:{id:string;tok
  let reply=savedPlanAnswer(input.message,record,memberId,decisions,plans),mode:'saved-plan'|'bedrock'='saved-plan',notice:string|undefined;
  let planningVersion:number|undefined;
  let followUps=['Show my schedule','Explain my money','What needs my attention?'];let prepared:unknown[]=[];
- if(provider&&record&&facts){
-  const planning=await loadPlanningPreferences(db(),record.owner,record.state.plan.id!,identity.id,record.state.plan.timezone);
-  planningVersion=planning.version;
-  const context={facts,myPlanningPreferences:planning.preferences,history:input.history,question:input.message};
+ if(provider&&(record&&facts||input.agent)&&!input.demoMember){
+  const planning=record?await loadPlanningPreferences(db(),record.owner,record.state.plan.id!,identity.id,record.state.plan.timezone):null;
+  planningVersion=planning?.version;
+  const context={facts,plans,callerMemberId:identity.id,myPlanningPreferences:planning?.preferences??null,history:input.history,question:input.message};
   // Large plans still get a useful saved-data answer without an unbounded model request.
   if(JSON.stringify(context).length<=46000){
    let release;try{
     release=await acquireAiLease(db(),identity.id,'plan-draft');
-    if(input.agent&&!input.demoMember){const result=await converseAgent(provider,{system:agentInstructions,prompt:JSON.stringify(context),tools:agentToolDefinitions,execute:(name,args)=>executeAgentTool({database:db(),repository,owner:access.id,identity,boundPlanId:input.planId},name,args)});reply=result.text;prepared=result.results;mode='bedrock';}
+    if(input.agent&&!input.demoMember){const result=await converseAgent(provider,{system:agentInstructions,prompt:JSON.stringify(context),tools:record?agentToolDefinitions:agentToolDefinitions.filter(t=>t.name==='prepare_plan'),execute:(name,args)=>executeAgentTool({database:db(),repository,owner:access.id,identity,boundPlanId:input.planId,turn:input.conversationId?{conversationId:input.conversationId,requestId:input.requestId!,conversationOwner}:undefined},name,args)});reply=result.text;prepared=result.results;mode='bedrock';}
     else{const result=await converseJson(provider,{system:assistantSystem,prompt:JSON.stringify(context),validate:value=>assistantAnswer.parse(value)});reply=result.value.answer;followUps=result.value.followUps;mode='bedrock';}
-   }catch{notice='AI could not answer just now. Here is the answer from your saved plan.';}finally{if(release)await release();}
+   }catch{if(input.conversationId)prepared=await savedToolResults(db(),conversationOwner,identity.id,input.conversationId,input.requestId);notice=prepared.length?'Your prepared reviews were saved. Open them below; the assistant could not finish its reply.':'AI could not answer just now. Here is the answer from your saved plan.';}finally{if(release)await release();}
   }else notice='This plan is large. Showing the answer from your saved records.';
  }
  if(record){const freshAccess=await workspaceAccess(request),current=await repository.getPlan(record.state.plan.id!,identity);

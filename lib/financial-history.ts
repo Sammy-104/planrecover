@@ -11,7 +11,7 @@ export function approvedItemSnapshot(item:Item){return JSON.stringify({id:item.i
  name:item.name,category:item.category,start:item.start,duration:item.duration,price:item.price,
  participants:[...item.participants].sort(),shares:sorted(item.shares),allocation:item.allocation,
  values:sorted(item.values),required:[...(item.required??item.participants)].sort(),policy:item.policy,
- expires:item.expires,deadline:item.deadline,source:item.source,...(item.funding?{funding:item.funding}:{})});}
+ expires:item.expires,deadline:item.deadline,source:item.source,...(item.funding?{funding:item.funding}:{}),...(item.collection?{collection:item.collection}:{})});}
 export async function sha256(value:string){return [...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(value)))].map(n=>n.toString(16).padStart(2,'0')).join('');}
 
 /** Facts and approval snapshots cannot be overwritten; status changes append history. */
@@ -62,7 +62,8 @@ export async function claimPaymentFunding(database:D1Database,input:FundingClaim
   .bind(input.owner,input.planId,input.itemId,input.memberId).first();
  const prior=await database.prepare('SELECT channel,reference_id FROM payment_funding_claims WHERE owner=? AND plan_id=? AND item_id=? AND revision=? AND member_id=?')
   .bind(input.owner,input.planId,input.itemId,input.revision,input.memberId).first<{channel:string;reference_id:string}>();
- if(expense&&!prior)throw new BackendError('PAYMENT_ALREADY_RECORDED','A payment is already recorded for this purchase. Review its balance before collecting again.',409);
+ const credited=expense&&!prior?await database.prepare(`SELECT 1 AS credited FROM plans p,json_each(p.body,'$.items') i,json_each(i.value,'$.collection.due') due WHERE p.owner=? AND p.id=? AND p.status<>'deleted' AND json_extract(i.value,'$.id')=? AND json_extract(i.value,'$.revision')=? AND due.key=? AND due.value>0`).bind(input.owner,input.planId,input.itemId,input.revision,input.memberId).first():null;
+ if(expense&&!prior&&!credited)throw new BackendError('PAYMENT_ALREADY_RECORDED','A payment is already recorded for this purchase. Review its balance before collecting again.',409);
  await database.prepare('INSERT OR IGNORE INTO payment_funding_claims(owner,plan_id,item_id,revision,member_id,channel,reference_id,created) VALUES (?,?,?,?,?,?,?,?)')
   .bind(input.owner,input.planId,input.itemId,input.revision,input.memberId,input.channel,input.referenceId,new Date().toISOString()).run();
  const saved=await database.prepare('SELECT channel,reference_id FROM payment_funding_claims WHERE owner=? AND plan_id=? AND item_id=? AND revision=? AND member_id=?')
@@ -93,9 +94,9 @@ export async function commitFinancialEffect(database:D1Database,input:FinancialE
   }
   if(input.markPaid&&event.status==='confirmed'){
    const paid=input.markPaid,item=trip.items.find(i=>i.id===event.itemId);
-   if(item&&item.revision===paid.revision&&item.participants.includes(paid.memberId)&&item.shares[paid.memberId]===paid.amount){
-    const contributed=trip.events.filter(e=>e.itemId===item.id&&e.kind==='expense'&&e.status==='confirmed').reduce((sum,e)=>sum+(e.shares[paid.memberId]??0),0);
-    if(contributed>=paid.amount&&!item.paid.includes(paid.memberId)){item.paid.push(paid.memberId);changed=true;}
+   if(item&&item.revision===paid.revision&&item.participants.includes(paid.memberId)&&(item.collection?.due[paid.memberId]??item.shares[paid.memberId])===paid.amount){
+    const contributed=trip.events.filter(e=>e.itemId===item.id&&e.kind!=='settlement'&&e.status==='confirmed').reduce((sum,e)=>sum+(e.shares[paid.memberId]??0),0);
+    if(contributed>=item.shares[paid.memberId]&&!item.paid.includes(paid.memberId)){item.paid.push(paid.memberId);changed=true;}
     if(item.status==='awaiting-payment'&&item.participants.every(id=>item.paid.includes(id))){item.status='scheduled';changed=true;}
    }
   }

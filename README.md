@@ -33,7 +33,7 @@ The first source import is based on application commit `8bd3ed44d97fea2948234ecc
 
 ## Current behavior and limits
 
-Use [backend expansion](BACKEND_EXPANSION.md) for delivered features and adapter contracts. `/flows` exposes recovery/departure proposals, invoices, private availability and source evidence. `/agent-demo` is a simulated client using the same validated tools as the OAuth MCP transport; it does not establish a physical Alexa+ connection.
+Use [the eight backend gap fixes](BACKEND_GAP_FIXES.md) for the current release, alongside the historical [backend expansion](BACKEND_EXPANSION.md). All 49 offline regression suites pass. `/flows` exposes recovery/departure proposals, invoices, private availability and source evidence. `/agent-demo` is a simulated client using the same validated tools as the OAuth MCP transport; it does not establish a physical Alexa+ connection.
 
 PayPal calls remain pinned to sandbox. New external adapters require explicit private configuration and approvals. Pending refunds never fund new payments. Live AWS inference is dependent on the account's quota and the [zero-spend testing policy](docs/project-records/AWS_TESTING_POLICY.md). Provider setup, genuine invoice/multi-account testing, public relay activation and scheduler access remain separate operational work.
 

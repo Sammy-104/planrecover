@@ -1,0 +1,10 @@
+import assert from 'node:assert/strict';
+import {paymentOverview} from '../lib/payment-overview.ts';
+const item=(id,extra={})=>({id,source:'Seeded demo catalog · Fictional test',status:'awaiting-payment',participants:['alice'],required:['alice'],approvals:['alice'],paid:[],shares:{alice:1600},revision:1,...extra}),invoice=extra=>({id:'invoice',planId:'plan',itemId:'museum',memberId:'alice',revision:1,status:'sent',outstanding:1600,...extra}),state={plan:{id:'plan'},items:[item('museum')],events:[{kind:'refund',status:'pending',amount:100000}]};
+assert.equal(paymentOverview(state,'alice',[]).total,1600);
+const partial=paymentOverview(state,'alice',[invoice({status:'partially-paid',outstanding:600})]);assert.equal(partial.total,600);assert.equal(partial.directDue.length,0);assert.equal(partial.openInvoices.length,1);
+const foreign=paymentOverview(state,'alice',[invoice({memberId:'bob'}),invoice({planId:'another-plan'})]);assert.equal(foreign.total,1600);assert.equal(foreign.openInvoices.length,0);assert.equal(foreign.directDue.length,1);
+assert.equal(paymentOverview(state,'alice',[invoice({status:'cancelled'})]).directDue.length,1);
+const complete=paymentOverview(state,'alice',[invoice({status:'paid',outstanding:0})]);assert.equal(complete.total,0);assert.equal(complete.directDue.length,0);
+const mixed=paymentOverview({...state,items:[item('museum'),item('outside',{source:'Manual'}),item('paid',{paid:['alice']}),item('draft',{status:'draft'}),item('other',{participants:['bob']})]},'alice',[invoice({outstanding:600})]);assert.equal(mixed.total,600);assert.equal(mixed.waiting.length,1);assert.equal(mixed.directDue.length,0);
+console.log('PASS payment overview: partial invoices replace full-share checkout, foreign accounts/plans stay out, cancellation releases checkout, paid shares never repeat, outside bookings/drafts/refunds never inflate payable totals.');

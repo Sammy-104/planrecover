@@ -15,8 +15,8 @@ export async function planApiContext(request:Request,options:{readOnly?:boolean}
   if(!options.readOnly)await loadState(access.id,access.user);
   return {access,identity:access.user,repository:new PlanRepository(db())};
 }
-export function recordResponse(record:{state:State;version:number;role:string}) {
-  return Response.json({state:record.state,version:record.version,role:record.role},{headers:privateHeaders});
+export function recordResponse(record:{state:State;version:number;role:string},memberId?:string) {
+  return Response.json({state:record.state,version:record.version,role:record.role,...(memberId?{memberId}:{})},{headers:privateHeaders});
 }
 export function parsePlanCreation(input:unknown) {
   const envelope=z.object({plan:z.unknown()}).strict().safeParse(input);

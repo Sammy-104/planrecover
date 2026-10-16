@@ -19,6 +19,7 @@ export async function POST(request: Request) {
         database,
         fetchOrder: id => paypal(`/v2/checkout/orders/${encodeURIComponent(id)}`),
         fetchRefund: id => paypal(`/v2/payments/refunds/${encodeURIComponent(id)}`),
+        fetchInvoice: id => paypal(`/v2/invoicing/invoices/${encodeURIComponent(id)}`),
         reconcileCapture, loadState, saveState,
       }),
     });

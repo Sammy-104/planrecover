@@ -53,7 +53,7 @@ await check('July 2026 discovery and tool calls validate request metadata and pr
   assert.deepEqual(discover.result.supportedVersions,['2026-07-28']);
   assert.equal(discover.result._meta['io.modelcontextprotocol/serverInfo'].name,'PlanRecover');
   const tools=await decoded(await handlePlanMcp(modern('tools/list'),neverResolve));
-  assert.equal(tools.result.tools.length,9);
+  assert.equal(tools.result.tools.length,10);
   assert.equal(tools.result.tools.find(t=>t.name==='prepare_plan').annotations.readOnlyHint,false);
   assert.equal(tools.result.resultType,'complete');
   const resource=await decoded(await handlePlanMcp(modern('resources/read',{uri:'planrecover://skills/planning'},
@@ -95,7 +95,7 @@ await check('MCP initialization, discovery and the matching Agent Skill remain p
     assert.equal(negotiated.result.protocolVersion, protocolVersion);
   }
   const listed = await decoded(await handlePlanMcp(request(rpc('tools/list')), neverResolve));
-  assert.deepEqual(listed.result.tools.map(tool => tool.name).sort(), ['compare_recovery_options','get_change_status','get_decisions','get_my_money','get_plan','list_plans','prepare_plan','prepare_plan_action','prepare_plan_change']);
+  assert.deepEqual(listed.result.tools.map(tool => tool.name).sort(), ['compare_recovery_options','get_change_status','get_decisions','get_my_money','get_plan','list_plans','prepare_plan','prepare_plan_action','prepare_plan_change','prepare_receipt_review']);
   for (const tool of listed.result.tools) {
     assert.equal(tool.annotations.readOnlyHint, !tool.name.startsWith('prepare_'));
     assert.equal(tool.annotations.destructiveHint, false);

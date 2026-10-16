@@ -1,5 +1,7 @@
 # Backend expansion — October 15, 2026
 
+**Current release:** [BACKEND_GAP_FIXES.md](BACKEND_GAP_FIXES.md) supersedes the historical implementation counts and remaining code gaps below. The eight audited code gaps now have implementations and regression coverage; 49 suites pass. External provider activation and genuine hosted journeys remain separate.
+
 This implements the code gaps recorded in the project-wide `BACKEND_REMAINING_WORK.md` audit. The working source is `planrecover-completion-site`, opened from the existing private Site. Historical checkouts and synced `sources/` are preserved. External providers use configurable adapters first, as requested. Account setup and real provider verification remain separate from implementation.
 
 ## Available flows

@@ -6,6 +6,7 @@ import {resolve,join} from 'node:path';
 import {createTestD1} from './helpers/d1.mjs';
 import {PlanRepository} from '../lib/plan-repository.ts';
 import {accountPersonId,addPerson} from '../lib/people.ts';
+import {ConversationRepository} from '../lib/conversations.ts';
 const root=fileURLToPath(new URL('../',import.meta.url)),require=createRequire(import.meta.url),{build}=require(createRequire(require.resolve('vite')).resolve('esbuild'));
 const origin='https://planrecover.test',owner='assistant-alice',alice={id:await accountPersonId(owner),name:'Alice'},bob={id:await accountPersonId('assistant-bob'),name:'Bob'};
 mkdirSync(resolve(root,'build'),{recursive:true});const directory=mkdtempSync(join(root,'build','backend-assistant-'));
@@ -66,6 +67,14 @@ try{
   configured();database.sqlite.prepare('INSERT INTO ai_usage_limits(member_id,feature,window_start,request_count,lease_until) VALUES (?,?,?,?,0)').run(alice.id,'plan-draft',Math.floor(Date.now()/3600000)*3600000,20);
   const result=await decoded(await route.POST(request({planId:id,message:'Explain my money'})));assert.equal(result.mode,'saved-plan');assert.equal(calls,0);
   assert.equal(database.sqlite.prepare('SELECT COUNT(*) AS n FROM provider_operations').get().n,0);
+ });
+ await check('Planless chat prepares a first-plan preview through tools without creating or approving a plan',async({database,repository})=>{
+  configured();const before=await repository.listPlans(alice.id);let step=0;provider=async()=>Response.json(step++===0?{output:{message:{role:'assistant',content:[{toolUse:{toolUseId:'create-preview',name:'prepare_plan',input:{plan:plan('First plan preview')}}}]}},stopReason:'tool_use',usage:{totalTokens:40}}:{output:{message:{role:'assistant',content:[{text:'Your new plan is prepared for review.'}]}},stopReason:'end_turn',usage:{totalTokens:20}});
+  const result=await decoded(await route.POST(request({agent:true,message:'Create my first Toronto day out'})));assert.equal(result.mode,'bedrock');assert.equal(result.prepared[0].name,'prepare_plan');assert.match(result.prepared[0].result.reviewUrl,/^\/flows\?proposal=/);assert.equal((await repository.listPlans(alice.id)).length,before.length);assert.equal(database.sqlite.prepare('SELECT COUNT(*) n FROM provider_operations').get().n,0);
+ });
+ await check('An agent tool preview remains linked to the private conversation when later model inference fails',async({database,id})=>{
+  configured();const conversation=await new ConversationRepository(database).create(owner,alice,id);let step=0;provider=async()=>step++===0?Response.json({output:{message:{role:'assistant',content:[{toolUse:{toolUseId:'prepare',name:'prepare_plan',input:{plan:plan('Retained preview')}}}]}},stopReason:'tool_use',usage:{totalTokens:40}}):new Response('fixture outage',{status:503});
+  const result=await decoded(await route.POST(request({planId:id,agent:true,message:'Prepare another plan',conversationId:conversation.id,conversationVersion:conversation.version,requestId:crypto.randomUUID()})));assert.equal(result.prepared.length,1);assert.match(result.notice,/saved/);const read=await new ConversationRepository(database).read(owner,alice,conversation.id);assert.equal(read.prepared.length,1);assert.equal(read.messages.find(m=>m.role==='assistant').metadata.prepared.length,1);
  });
  console.log(`${checks} authenticated assistant checks passed.`);
 }finally{rmSync(directory,{recursive:true,force:true});delete globalThis.assistantTestEnv;}

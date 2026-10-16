@@ -41,7 +41,8 @@ export function approvedCheckoutAmount(trip: Pick<State, 'plan'>, item: Item | u
       amounts.some(([id, amount]) => !item.participants.includes(id) || !Number.isSafeInteger(amount) || amount < 0) ||
       amounts.reduce((sum, [, amount]) => sum + amount, 0) !== item.price)
     throw Error('Approved shares must match the exact quoted total.');
-  const amount = item.shares[actor];
+  const amount = item.collection?.due[actor] ?? item.shares[actor];
+  if(item.collection&&(!Number.isSafeInteger(amount)||amount<0||amount>item.shares[actor]))throw Error('Review the credited deposit and remaining balance.');
   if (!Number.isSafeInteger(amount) || amount <= 0) throw Error('A positive approved share is required for checkout.');
   return amount;
 }

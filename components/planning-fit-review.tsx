@@ -1,0 +1,7 @@
+'use client';
+import {useEffect,useState} from 'react';
+export function PlanningFitReview({planId,version,action}:{planId:string;version:number;action:unknown}){
+ const [value,setValue]=useState<any>(null),[error,setError]=useState(''),key=JSON.stringify(action);
+ useEffect(()=>{const abort=new AbortController();setValue(null);setError('');const timer=setTimeout(()=>{void fetch(`/api/plans/${encodeURIComponent(planId)}/review`,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({version,action:JSON.parse(key)}),signal:abort.signal}).then(async response=>{const result=await response.json() as any;if(!response.ok)throw Error(result.error??'Fit needs another check.');return result.review;}).then(result=>{if(!abort.signal.aborted)setValue(result);}).catch(e=>{if(!abort.signal.aborted)setError(e.message);});},250);return()=>{clearTimeout(timer);abort.abort();};},[planId,version,key]);
+ return <section className="notice" aria-live="polite"><strong>Your private fit review</strong>{error?<p>{error}</p>:!value?<p>Checking saved availability, travel and your limits…</p>:<><p>{value.hasBlockingIssues?'Some constraints need attention. You can keep this as an unverified draft.':'No conflict was found in the available facts. Missing facts still need review.'}</p>{value.issues.map((issue:any,index:number)=><p key={index}>{issue.message}</p>)}<p>Affordability: {value.affordability.status.replaceAll('-',' ')}. Other participants review their own limits.</p></>}</section>;
+}

@@ -111,6 +111,7 @@ export type ProviderRefund = {
   links?: { rel?: string; href?: string }[];
 };
 export type PayPalReconciliationDependencies = {
+  fetchInvoice?:(id:string)=>Promise<unknown>;
   database: D1Database;
   fetchOrder: (id: string) => Promise<ProviderOrder>;
   fetchRefund: (id: string) => Promise<ProviderRefund>;
@@ -269,6 +270,11 @@ export async function reconcilePayPalOperation(operation: PaymentOperation, depe
 }
 
 export async function processPayPalWebhook(event: PayPalWebhookEvent, dependencies: PayPalReconciliationDependencies) {
+  if(event.event_type.startsWith('INVOICING.INVOICE.')){
+    const id=typeof event.resource.id==='string'?event.resource.id:(event.resource.invoice as {id?:string}|undefined)?.id;
+    if(!id||!/^INV2-[A-Z0-9-]{1,40}$/.test(id)||!dependencies.fetchInvoice)throw Error('The saved invoice notification needs canonical reconciliation.');
+    const {reconcileInvoiceNotification}=await import('./plan-invoices.ts');await reconcileInvoiceNotification(dependencies.database,id,dependencies.fetchInvoice);return;
+  }
   if (event.event_type === 'PAYMENT.CAPTURE.COMPLETED') {
     const related = event.resource.supplementary_data as { related_ids?: { order_id?: string } } | undefined;
     const orderId = related?.related_ids?.order_id;

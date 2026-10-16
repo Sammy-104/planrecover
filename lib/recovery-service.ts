@@ -7,7 +7,7 @@ import { dataTripId, providerCents, requireCaptureLedgerMatch, verifiedOrderCapt
 import { relatedCaptureId, type ProviderRefund } from './paypal-webhooks.ts';
 import { PlanRepository } from './plan-repository.ts';
 import { mergeSharedTrip, sharedTripView } from './trip-sharing.ts';
-import { commitFinancialEffect, saveProviderRequestIntent } from './financial-history.ts';
+import { commitFinancialEffect, saveProviderRequestIntent,sha256 } from './financial-history.ts';
 
 const identifier = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/);
 const units = z.number().int().min(0).max(1_000_000_000_000);
@@ -40,7 +40,11 @@ export type BookingPolicy = z.infer<typeof bookingPolicyRequest>['policy'] & {
 };
 type CaptureAllocation = {captureId:string; operationId:string; memberId:string; captured:number; amount:number; currency:string;costShares?:Record<string,number>;policyMaximum?:number};
 type ProposalBody = {policy:BookingPolicy; reason:string; fingerprint:string; required:string[];
-  allocations:CaptureAllocation[]; dependentItems:{id:string;name:string;revision:number}[]};
+  allocations:CaptureAllocation[];invoiceRefunds?:{id:string;invoiceId:string;memberId:string;amount:number;expectedTotal:number;baseline:string[]}[]; dependentItems:{id:string;name:string;revision:number}[]};
+async function invoiceRecoveryReady(database:D1Database,owner:string,planId:string,snapshot:ProposalBody){
+ for(const invoice of snapshot.invoiceRefunds??[]){const row=await database.prepare('SELECT COALESCE(SUM(amount),0) AS n FROM invoice_refunds WHERE invoice_id=?').bind(invoice.invoiceId).first<{n:number}>();if((row?.n??0)<invoice.expectedTotal)return false;}
+ const open=await database.prepare("SELECT COUNT(*) AS n FROM plan_invoices i WHERE i.owner=? AND i.plan_id=? AND i.item_id=? AND i.paid>0 AND i.paid<i.amount AND i.status<>'cancelled' AND NOT EXISTS(SELECT 1 FROM invoice_collection_closures c WHERE c.invoice_id=i.id AND c.status='verified')").bind(owner,planId,snapshot.policy.itemId).first<{n:number}>();return !open?.n;
+}
 type ProposalRow = {id:string;owner:string;plan_id:string;policy_id:string;plan_version:number;version:number;
   status:'review'|'executing'|'completed'|'manual-review'|'cancelled';body:string;created_by:string;created:string;updated:string};
 type ReservationRow = {id:string;proposal_id:string;capture_id:string;member_id:string;amount:number;currency:string;
@@ -158,6 +162,7 @@ export async function cancelRecoveredBooking(database:D1Database,input:Parameter
     const proposal=await database.prepare('SELECT body,version FROM recovery_proposals WHERE id=? AND owner=? AND plan_id=?')
       .bind(input.proposalId,input.scope.owner,input.scope.planId).first<{body:string;version:number}>();
     if(!proposal)throw unavailable();const snapshot=JSON.parse(proposal.body) as ProposalBody;
+    if(!await invoiceRecoveryReady(database,input.scope.owner,input.scope.planId,snapshot))throw new BackendError('INVOICE_REFUND_PENDING','Complete the approved invoice refund and closure checks first.',409);
     if(snapshot.fingerprint!==input.fingerprint||snapshot.required.some(id=>!target.people?.some(person=>person.id===id&&person.role!=='legacy')))throw conflict();
     if(target.items.some(candidate=>candidate.status!=='cancelled'&&candidate.depends.includes(item.id)))
       throw new BackendError('RECOVERY_DEPENDENCIES','Review dependent bookings before cancellation.',409);
@@ -275,10 +280,13 @@ export class RecoveryService {
     if(item.funding){const approved=await this.database.prepare('SELECT snapshot FROM approval_revisions WHERE owner=? AND plan_id=? AND item_id=? AND revision=?').bind(scope.owner,scope.planId,item.id,funding.revision).first<{snapshot:string}>();const facts=approved?JSON.parse(approved.snapshot):null;
       if(!facts||funding.price!==item.price||funding.source!==item.source||facts.price!==funding.price||facts.source!==funding.source||JSON.stringify(Object.entries(facts.shares).sort())!==JSON.stringify(Object.entries(funding.shares).sort())||JSON.stringify([...facts.participants].sort())!==JSON.stringify([...funding.participants].sort()))throw captureMismatch();}
     const fees=allocate(policy.cancellationFeeUnits,funding.participants,'weight',funding.shares,funding.participants);
+    const operations=rows.results.filter(op=>dataTripId(op)===scope.planId),operationFees=await this.fundingFees(scope,item,policy);
     const result:CaptureAllocation[]=[];const seenMembers=new Set<string>(),seenCaptures=new Set<string>();
-    for(const operation of rows.results.filter(op=>dataTripId(op)===scope.planId)) {
-      if(!operation.provider_id||operation.revision!==funding.revision||operation.amount!==funding.shares[operation.member]||
-        !funding.participants.includes(operation.member)||seenMembers.has(operation.member))throw captureMismatch();
+    for(const operation of operations) {
+      if(!operation.provider_id)throw captureMismatch();
+      if(item.collection){const approved=await this.database.prepare('SELECT snapshot FROM approval_revisions WHERE owner=? AND plan_id=? AND item_id=? AND revision=?').bind(scope.owner,scope.planId,item.id,operation.revision).first<{snapshot:string}>();const facts=approved?JSON.parse(approved.snapshot):null;
+       if(!facts||operation.amount!==(facts.collection?.due?.[operation.member]??facts.shares?.[operation.member])||!facts.participants.includes(operation.member))throw captureMismatch();
+      }else if(operation.revision!==funding.revision||operation.amount!==funding.shares[operation.member]||!funding.participants.includes(operation.member)||seenMembers.has(operation.member))throw captureMismatch();
       let order:ProviderOrder;
       try{order=await this.dependencies.fetchOrder(operation.provider_id);}catch{throw captureMismatch();}
       const originalCapture=verifiedRecoveryOrderCapture(operation,JSON.parse(operation.payload??'{}'));
@@ -299,9 +307,13 @@ export class RecoveryService {
         if((metadata.planrecoverCaptureId??metadata.captureId)===capture.id)alreadyEncumbered+=refund.amount;}
       seenMembers.add(operation.member);seenCaptures.add(capture.id);
       result.push({captureId:capture.id,operationId:operation.id,memberId:operation.member,captured:operation.amount,
-        amount:Math.max(0,maximumCaptureRefund(operation.amount,policy.refundableBps,fees[operation.member])-alreadyEncumbered),currency:policy.currency,...(item.funding?{policyMaximum:maximumCaptureRefund(operation.amount,policy.refundableBps,fees[operation.member])}:{})});
+        amount:Math.max(0,maximumCaptureRefund(operation.amount,policy.refundableBps,operationFees[operation.id]??fees[operation.member])-alreadyEncumbered),currency:policy.currency,policyMaximum:maximumCaptureRefund(operation.amount,policy.refundableBps,operationFees[operation.id]??fees[operation.member])});
     }
     return result;
+  }
+  private async fundingFees(scope:RecoveryScope,item:Item,policy:BookingPolicy){
+    const captures=await this.database.prepare("SELECT id,amount,payload FROM provider_operations WHERE owner=? AND item_id=? AND kind='order' AND status='captured'").bind(scope.owner,item.id).all<{id:string;amount:number;payload:string}>(),invoices=await this.database.prepare('SELECT id,paid FROM plan_invoices WHERE owner=? AND plan_id=? AND item_id=? AND paid>0').bind(scope.owner,scope.planId,item.id).all<{id:string;paid:number}>();
+    const weights=Object.fromEntries([...captures.results.filter(c=>JSON.parse(c.payload).planrecoverTripId===scope.planId).map(c=>[c.id,c.amount] as const),...invoices.results.map(i=>[`invoice-${i.id}`,i.paid] as const)]),ids=Object.keys(weights).sort();return ids.length?allocate(policy.cancellationFeeUnits,ids,'weight',weights,ids):{};
   }
   private verifyCapture(capture:CanonicalCapture,expected:{captureId:string;captured:number}) {
     if(capture.id!==expected.captureId||!['COMPLETED','PARTIALLY_REFUNDED','REFUNDED'].includes(capture.status??'')||
@@ -335,9 +347,12 @@ export class RecoveryService {
     const dependents=current.state.items.filter(candidate=>candidate.status!=='cancelled'&&candidate.depends.includes(item.id));
     if(item.funding)for(const allocation of allocations)allocation.costShares=allocate(allocation.amount,item.participants,'weight',item.shares,item.participants);
     const required=[...new Set([...item.participants,...(item.funding?.participants??[]),...dependents.flatMap(item=>item.participants)])].sort();
-    const snapshot:ProposalBody={policy,reason:input.reason,fingerprint:recoveryItemFingerprint(item),required,
+    const id=crypto.randomUUID(),invoiceRefunds:NonNullable<ProposalBody['invoiceRefunds']>=[];
+    const invoices=await this.database.prepare('SELECT id,member_id,paid FROM plan_invoices WHERE owner=? AND plan_id=? AND item_id=? AND paid>0').bind(scope.owner,scope.planId,item.id).all<{id:string;member_id:string;paid:number}>(),invoiceFees=await this.fundingFees(scope,item,policy);
+    for(const invoice of invoices.results){const prior=await this.database.prepare('SELECT refund_id,amount FROM invoice_refunds WHERE invoice_id=?').bind(invoice.id).all<{refund_id:string;amount:number}>(),already=prior.results.reduce((n,r)=>n+r.amount,0),expectedTotal=maximumCaptureRefund(invoice.paid,policy.refundableBps,invoiceFees[`invoice-${invoice.id}`]??0),amount=Math.max(0,expectedTotal-already);if(amount){const hash=await sha256(`${id}:${invoice.id}`);invoiceRefunds.push({id:`${hash.slice(0,8)}-${hash.slice(8,12)}-4${hash.slice(13,16)}-a${hash.slice(17,20)}-${hash.slice(20,32)}`,invoiceId:invoice.id,memberId:invoice.member_id,amount,expectedTotal,baseline:prior.results.map(r=>r.refund_id)});}}
+    const snapshot:ProposalBody={policy,reason:input.reason,fingerprint:recoveryItemFingerprint(item),required,...(invoiceRefunds.length?{invoiceRefunds}:{}),
       allocations,dependentItems:dependents.map(({id,name,revision})=>({id,name,revision}))};
-    const id=crypto.randomUUID(),now=this.now().toISOString();
+    const now=this.now().toISOString();
     const inserted=await this.database.prepare(`INSERT INTO recovery_proposals
       (id,owner,plan_id,policy_id,plan_version,version,status,body,created_by,created,updated)
       SELECT ?,?,?,?,?,1,'review',?,?,?,? WHERE ${this.accessCondition(true)}`)
@@ -394,6 +409,12 @@ export class RecoveryService {
             planrecoverRecoveryProposalId:proposal.id,planrecoverRecoveryReservationId:reservationId,planrecoverCapacityReserved:true})));
     }
     commands.push(this.database.prepare("UPDATE recovery_proposals SET status='executing',updated=? WHERE id=?").bind(now,proposal.id));
+    for(const invoice of proposal.snapshot.invoiceRefunds??[]){
+     const body=JSON.stringify({reason:proposal.snapshot.reason,recoveryProposalId:proposal.id,previousRefunds:invoice.baseline});
+     commands.push(this.database.prepare('INSERT INTO backend_write_guards(id,valid) VALUES (?,CASE WHEN EXISTS(SELECT 1 FROM invoice_refund_requests WHERE id=?) OR ?<=(SELECT paid FROM plan_invoices WHERE id=?)-(SELECT COALESCE(SUM(amount),0) FROM invoice_refunds WHERE invoice_id=?)-(SELECT COALESCE(SUM(amount),0) FROM invoice_refund_requests WHERE invoice_id=? AND status IN (\'review\',\'awaiting-merchant\')) THEN 1 ELSE 0 END)').bind(`invoice-${invoice.id}`,invoice.id,invoice.amount,invoice.invoiceId,invoice.invoiceId,invoice.invoiceId));
+     commands.push(this.database.prepare("INSERT OR IGNORE INTO invoice_refund_requests(id,owner,plan_id,invoice_id,member_id,amount,currency,terms,status,created,approved_owner,approved_member) VALUES (?,?,?,?,?,?,'CAD',?,'awaiting-merchant',?,1,1)").bind(invoice.id,scope.owner,scope.planId,invoice.invoiceId,invoice.memberId,invoice.amount,body,now));
+     commands.push(this.database.prepare('DELETE FROM backend_write_guards WHERE id=?').bind(`invoice-${invoice.id}`));
+    }
     commands.push(this.database.prepare('DELETE FROM backend_write_guards WHERE id=?').bind(token));
     try{await this.database.batch(commands);}catch(error){if(String(error).includes('CHECK constraint failed'))throw new BackendError('REFUND_CAPACITY','Another refund or plan change consumed the available capture balance.',409);throw error;}
     return this.get(scope,proposal.id);
@@ -496,6 +517,8 @@ export class RecoveryService {
       await this.renewExecution(scope,proposal.id,token);
       proposal=await this.reserve(scope,proposal,current.state,current.version,token);
     }
+    for(const invoice of proposal.snapshot.invoiceRefunds??[]){const amount=await this.database.prepare('SELECT COALESCE(SUM(amount),0) AS n FROM invoice_refunds WHERE invoice_id=?').bind(invoice.invoiceId).first<{n:number}>();if((amount?.n??0)<invoice.expectedTotal)return {...proposal,invoiceRefundRequired:invoice,reviewUrl:`/flows?plan=${encodeURIComponent(scope.planId)}`,message:'The approved invoice refund is ready for the sandbox merchant. Issue it there, check invoice status, then continue this saved recovery.'};}
+    if(!await invoiceRecoveryReady(this.database,scope.owner,scope.planId,proposal.snapshot))return {...proposal,message:'Close the old partial invoice collection in the reviewed change flow before completing this cancellation.'};
     let processed=0;
     for(const reservation of proposal.reservations) {
       if(reservation.status==='confirmed')continue;
@@ -583,6 +606,7 @@ export async function finalizeConfirmedRecoveries(database:D1Database,input:{own
     try{
       const snapshot=JSON.parse(row.body) as ProposalBody;
       if(snapshot.policy.merchant!=='fictional-sandbox')throw captureMismatch();
+      if(!await invoiceRecoveryReady(database,row.owner,row.plan_id,snapshot))throw new BackendError('INVOICE_REFUND_PENDING','The saved invoice refund or collection closure is still pending.',409);
       const reservations=await database.prepare('SELECT * FROM refund_reservations WHERE proposal_id=?').bind(row.id).all<ReservationRow>();
       const expected=snapshot.allocations.filter(allocation=>allocation.amount>0);
       if(reservations.results.length!==expected.length||expected.some(allocation=>!reservations.results.some(reservation=>

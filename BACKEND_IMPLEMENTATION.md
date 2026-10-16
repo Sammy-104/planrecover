@@ -1,5 +1,7 @@
 # PlanRecover backend: implemented increment
 
+**Current release:** [BACKEND_GAP_FIXES.md](BACKEND_GAP_FIXES.md) supersedes the historical implementation counts and remaining code gaps below. The eight audited code gaps now have implementations and regression coverage; 49 suites pass. External provider activation and genuine hosted journeys remain separate.
+
 **Current status:** [BACKEND_EXPANSION.md](BACKEND_EXPANSION.md) and [CURRENT_BACKEND_STATUS.md](CURRENT_BACKEND_STATUS.md) supersede the historical milestones below. The October 15 expansion passes 46 regression suites. Configurable adapters are implemented; external setup and genuine provider verification remain open. Use `/flows` for changes, cancellations, invoices and private preferences, and `/agent-demo` for the simulated voice client.
 
 12 October 2026. Working checkout: `planrecover-backend/`. The v25 export and synced project references are preserved. This increment implements the first backend milestone and adds payment/webhook safeguards plus the selected Alexa+ integration foundation. The full product backlog remains in `../PlanRecover_Backend_Workflow.md`.

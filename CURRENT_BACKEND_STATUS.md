@@ -1,5 +1,7 @@
 # Current backend status — October 15, 2026
 
+**Current release:** [BACKEND_GAP_FIXES.md](BACKEND_GAP_FIXES.md) supersedes the historical implementation counts and remaining code gaps below. The eight audited code gaps now have implementations and regression coverage; 49 suites pass. External provider activation and genuine hosted journeys remain separate.
+
 The October 15 implementation is documented in [BACKEND_EXPANSION.md](BACKEND_EXPANSION.md), which supersedes the historical report below. General recoveries/departures, private conversation continuation, nine MCP tools with review previews, receipt extraction history/retries/PDF/quantity support, safe source cleanup and configurable external adapters are implemented. Browser controls are at `/flows` and `/agent-demo`. All 46 regression suites and full TypeScript checking pass. External adapter activation and genuine provider journeys remain explicitly open; no live AWS calls or new provider payments were made by this implementation. Publication details are recorded separately after the supported build/deployment finishes.
 
 ## Historical October 14 report

@@ -15,11 +15,12 @@ export async function createPlanCheckout(record:PlanRecord,identity:Identity,inp
  if(!item)throw new BackendError('ITEM_NOT_FOUND','This payment item is unavailable.',404);
  requireMerchantCheckout(item);requirePaymentActor(record.state,identity.id,identity.id);
  const amount=approvedCheckoutAmount(record.state,item,identity.id,input.revision),planId=record.state.plan.id!;
- if(record.state.events.some(event=>event.itemId===item.id&&event.kind==='expense'&&event.status==='confirmed'&&(event.shares[identity.id]??0)>0))
+ if(record.state.events.filter(event=>event.itemId===item.id&&event.kind!=='settlement'&&event.status==='confirmed').reduce((sum,event)=>sum+(event.shares[identity.id]??0),0)>=(item.shares[identity.id]??0))
   throw new BackendError('PAYMENT_ALREADY_RECORDED','Your payment is already recorded for this purchase.',409);
  const id=(await sha256(`${record.owner}-${planId}-${item.id}-${identity.id}-${item.revision}`)).slice(0,38);
  await claimPaymentFunding(dependencies.database,{owner:record.owner,planId,itemId:item.id,revision:item.revision,memberId:identity.id,channel:'order',referenceId:id});
  const prior=await dependencies.database.prepare('SELECT * FROM provider_operations WHERE id=? AND owner=? AND kind=?').bind(id,record.owner,'order').first<PaymentOperation>();
+ if(prior?.status==='cancelled')throw new BackendError('CHECKOUT_CLOSED','This old checkout was closed under an approved change. Review the new revision.',409);
  if(prior?.provider_id)return {orderId:prior.provider_id,operationId:id};
  const key=(await sha256(record.owner+id)).slice(0,38),body={intent:'CAPTURE',purchase_units:[{
   reference_id:item.id,custom_id:id,description:`PlanRecover fictional sandbox merchant: ${item.name}`,
@@ -53,8 +54,9 @@ export async function capturePlanCheckout(record:PlanRecord,identity:Identity,or
  let order=await dependencies.provider(`/v2/checkout/orders/${encodeURIComponent(orderId)}`) as ProviderOrder;
  if(order.status!=='COMPLETED'){
   if(op.status==='manual-review')throw new BackendError('ORDER_REVIEW_REQUIRED','This recovered checkout needs merchant review before payment.',409);
+  if(op.status==='cancelled')throw new BackendError('CHECKOUT_CLOSED','This checkout is closed. Review the revised share.',409);
   verifyUncapturedOrder(op,order);
-  if(record.state.events.some(event=>event.itemId===item.id&&event.kind==='expense'&&event.status==='confirmed'&&(event.shares[identity.id]??0)>0))throw new BackendError('PAYMENT_ALREADY_RECORDED','Your payment is already recorded for this purchase.',409);
+  if(record.state.events.filter(event=>event.itemId===item.id&&event.kind!=='settlement'&&event.status==='confirmed').reduce((sum,event)=>sum+(event.shares[identity.id]??0),0)>=(item.shares[identity.id]??0))throw new BackendError('PAYMENT_ALREADY_RECORDED','Your payment is already recorded for this purchase.',409);
   if(approvedCheckoutAmount(record.state,item,identity.id,op.revision)!==op.amount)throw conflict();
   const snapshot=JSON.parse(op.payload??'{}').planrecoverApprovalSnapshot;
   if(snapshot&&snapshot!==approvedItemSnapshot(item))throw new BackendError('APPROVAL_CHANGED','Review the current payment terms.',409);
@@ -62,6 +64,8 @@ export async function capturePlanCheckout(record:PlanRecord,identity:Identity,or
   if(fresh.version!==record.version||!['owner','editor'].includes(fresh.role))throw conflict();
   const path=`/v2/checkout/orders/${encodeURIComponent(orderId)}/capture`,key=(await sha256(`capture-${record.owner}-${op.id}`)).slice(0,38);
   await saveProviderRequestIntent(dependencies.database,{operationId:`capture-${op.id}`,owner:record.owner,planId:record.state.plan.id!,path,body:{},requestKey:key});
+  const currentOperation=await dependencies.database.prepare('SELECT status FROM provider_operations WHERE id=? AND owner=?').bind(op.id,record.owner).first<{status:string}>();
+  if(!currentOperation||currentOperation.status==='cancelled')throw new BackendError('CHECKOUT_CLOSED','This checkout closed before capture. Review the revised share.',409);
   order=await dependencies.provider(path,'POST',{},key);
  }
  const capture=verifiedOrderCapture(op,order);

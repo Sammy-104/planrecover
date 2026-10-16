@@ -8,7 +8,7 @@ import type {previewPlanDraft} from '@/lib/ai-plan';
 type JsonFetch=(url:string,init?:RequestInit)=>Promise<any>;
 type Draft=ReturnType<typeof previewPlanDraft>;
 type ChatMessage={id:string;role:'user'|'assistant';text:string;mode?:string;notice?:string;prepared?:unknown[]};
-type SavedConversation={id:string;version:number;title:string;pending:boolean;hasMore:boolean;nextBefore:string|null};
+type SavedConversation={id:string;version:number;title:string;pending:boolean;hasMore:boolean;nextBefore:string|null;prepared?:unknown[]};
 function reviewLinks(prepared:unknown[]=[]){return prepared.flatMap(value=>{const url=(value as {result?:{reviewUrl?:unknown}})?.result?.reviewUrl;if(typeof url!=='string'||!url.startsWith('/flows?')||url.length>2000)return [];try{const parsed=new URL(url,'https://planrecover.invalid');return parsed.origin==='https://planrecover.invalid'&&parsed.pathname==='/flows'?[parsed.pathname+parsed.search]:[];}catch{return [];}});}
 export function AssistantNudge({state,memberId,onAsk}:{state:State;memberId:string;onAsk:(prompt:string)=>void}){
  const brief=assistantBrief(state,memberId);
@@ -59,7 +59,7 @@ export function PlanAssistant({state,memberId,jsonFetch,onNavigate,onReceipt,onA
    if(!mounted.current||currentGeneration!==generation.current)return;
    setMessages(current=>[...current,{id:crypto.randomUUID(),role:'user',text:value}]);
    const result=await jsonFetch('/api/assistant',{method:'POST',headers:{'Content-Type':'application/json'},signal:controller.signal,
-    body:JSON.stringify({planId,...demoMember?{demoMember}:{},message:value,conversationId:saved!.id,conversationVersion:saved!.version,requestId:crypto.randomUUID()})});
+    body:JSON.stringify({planId,...demoMember?{demoMember}:{agent:true},message:value,conversationId:saved!.id,conversationVersion:saved!.version,requestId:crypto.randomUUID()})});
    if(!mounted.current||currentGeneration!==generation.current)return;setModel(result.modelConnected??connected);setFollowUps(result.followUps??[]);
    await loadConversation(saved!.id);if(mounted.current&&currentGeneration===generation.current)await refreshConversations();
   }catch(error){if(!controller.signal.aborted&&mounted.current&&currentGeneration===generation.current){setError((error as Error).message);setInput(value);if(saved)await loadConversation(saved.id).catch(()=>{});}}
@@ -94,6 +94,7 @@ export function PlanAssistant({state,memberId,jsonFetch,onNavigate,onReceipt,onA
   <div className="assistant-layout"><div className="assistant-conversation panel">
    <div className="assistant-context"><span><MessageCircle size={17}/>{planId?state.plan.name:'Your saved plans'}</span><button className="text-button" disabled={busy||loadingHistory||!messages.length} onClick={newConversation}><RotateCcw size={14}/>New conversation</button></div>
    {!visitorDemo&&<div className="assistant-saved"><label className="field"><span>Private saved conversations</span><select aria-label="Saved conversations" value={conversation?.id??''} disabled={busy||loadingHistory} onChange={event=>{if(!event.target.value)newConversation();else{setLoadingHistory(true);void loadConversation(event.target.value).catch(error=>setError(error.message)).finally(()=>setLoadingHistory(false));}}}><option value="">New conversation</option>{savedConversations.map(saved=><option value={saved.id} key={saved.id}>{saved.title}</option>)}</select></label>{conversation&&<button className="text-button" disabled={busy||loadingHistory} onClick={()=>{void loadConversation(conversation.id).catch(error=>setError(error.message));}}>Check saved reply</button>}</div>}
+   {reviewLinks(conversation?.prepared).length>0&&<aside className="notice"><strong>Your saved reviews</strong>{[...new Set(reviewLinks(conversation?.prepared))].map(url=><p key={url}><a href={url}>Open prepared review</a></p>)}<small>These remain available even if a reply was interrupted.</small></aside>}
    <div className="assistant-messages" role="log" aria-label="Conversation" aria-live="polite">
     {loadingHistory&&<p role="status">Loading your private conversation…</p>}{conversation?.hasMore&&<button className="text-button" disabled={loadingHistory||busy} onClick={()=>{setLoadingHistory(true);void loadConversation(conversation.id,true).catch(error=>setError(error.message)).finally(()=>setLoadingHistory(false));}}>Load earlier messages</button>}
     {!messages.length&&!loadingHistory&&<div className="assistant-welcome"><div className="assistant-avatar"><Sparkles size={26}/></div><h2>What would make planning easier?</h2><p>Ask me to explain costs, find the next thing to review, or walk through your day.</p><div className="assistant-starters">{['List my plans','Show my schedule','Explain my money','Help me scan a receipt'].map(question=><button className="btn" disabled={chatDisabled} key={question} onClick={()=>send(question)}>{question}<ArrowRight size={15}/></button>)}</div></div>}

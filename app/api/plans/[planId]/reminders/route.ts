@@ -3,11 +3,12 @@ import {checkOrigin,apiError,db} from '@/lib/store';
 import {planApiContext,privateHeaders} from '@/lib/plan-api';
 import {BackendError} from '@/lib/backend-errors';
 import {ReminderRepository} from '@/lib/reminder-jobs';
+import {env} from 'cloudflare:workers';
 type Context={params:Promise<{planId:string}>};
 
 export async function GET(request:Request,context:Context){
  try{const {identity}=await planApiContext(request),{planId}=await context.params;
-  return Response.json(await new ReminderRepository(db()).list(planId,identity),{headers:privateHeaders});
+  return Response.json(await new ReminderRepository(db(),env as unknown as Record<string,unknown>).list(planId,identity),{headers:privateHeaders});
  }catch(error){return apiError(error);}
 }
 export async function PATCH(request:Request,context:Context){

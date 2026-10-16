@@ -3,7 +3,7 @@ import {BackendError,conflict,forbidden} from './backend-errors.ts';
 import {approvedCheckoutAmount,requirePayPalCurrency} from './payment-guards.ts';
 import {requireMerchantCheckout} from './merchant-scope.ts';
 import type {PlanRecord} from './plan-repository.ts';
-import type {MoneyEvent} from './model.ts';
+import {allocate,type MoneyEvent,type State} from './model.ts';
 import {claimPaymentFunding,commitFinancialEffect} from './financial-history.ts';
 
 const maxMoney=100_000_000;
@@ -15,20 +15,21 @@ export const invoiceCreateRequest=z.object({version:z.number().int().nonnegative
 export const invoiceActionRequest=z.object({version:z.number().int().nonnegative(),invoiceVersion:z.number().int().nonnegative(),
  action:z.enum(['approve','reconcile','send','cancel']),confirm:z.boolean().optional()}).strict();
 export type InvoiceCreate=z.infer<typeof invoiceCreateRequest>;
-export type InvoiceStatus='creating'|'draft'|'sending'|'sent'|'partially-paid'|'paid'|'cancelling'|'cancelled'|'needs-review';
+export type InvoiceStatus='creating'|'draft'|'sending'|'sent'|'partially-paid'|'paid'|'cancelling'|'cancelled'|'needs-review'|'partially-refunded'|'refunded'|'closed';
 type Terms={planId:string;itemId:string;itemName:string;memberId:string;revision:number;amount:number;currency:'CAD';
  email:string;due:string;dueAt:string;allowPartial:boolean;minimum:number;reference:string;invoiceNumber:string;approvedSnapshot:string};
 type InvoiceRow={id:string;owner:string;plan_id:string;item_id:string;member_id:string;revision:number;request_id:string;
  terms:string;approved_members:string;amount:number;minimum:number;paid:number;provider_id:string|null;provider_url:string|null;status:InvoiceStatus;provider_status:string|null;
- version:number;lease_until:number;lease_token:string|null;last_error:string|null;created:string;updated:string};
+ version:number;lease_until:number;lease_token:string|null;last_error:string|null;created:string;updated:string;lifecycle_status?:InvoiceStatus|null};
 export type PlanInvoice={id:string;planId:string;itemId:string;memberId:string;revision:number;amount:number;minimum:number;paid:number;
  outstanding:number;currency:'CAD';due:string;dueAt:string;allowPartial:boolean;approvedMembers:string[];recipientEmail:string;providerId:string|null;status:InvoiceStatus;
  providerStatus:string|null;version:number;created:string;updated:string;paymentUrl:string|null;requiresReview:boolean};
 export type InvoiceProvider=(path:string,method?:string,body?:unknown,key?:string)=>Promise<any>;
 export type InvoiceScope={record:PlanRecord;memberId:string};
 export type InvoicePayment={id:string;amount:number;event:MoneyEvent;body:string};
-export type InvoiceCommit={row:InvoiceRow;expectedVersion:number;payments:InvoicePayment[];paid:number;status:InvoiceStatus;providerStatus:string;providerUrl:string|null;
- leaseToken:string;at:string};
+export type InvoiceRefund={id:string;amount:number;body:string};
+export type InvoiceCommit={row:InvoiceRow;expectedVersion:number;payments:InvoicePayment[];refunds?:InvoiceRefund[];paid:number;status:InvoiceStatus;providerStatus:string;providerUrl:string|null;
+ leaseToken:string;at:string;collectionClosed?:boolean};
 export type InvoiceEffects={
  claim:(scope:InvoiceScope,invoiceId:string,itemId:string,revision:number,memberId:string)=>Promise<void>;
  commit:(scope:InvoiceScope,input:InvoiceCommit)=>Promise<void>;
@@ -47,9 +48,10 @@ const unavailable=()=>new BackendError('INVOICE_UNAVAILABLE','This invoice is un
 const now=()=>new Date().toISOString();
 function parseTerms(row:InvoiceRow):Terms{return JSON.parse(row.terms);}
 function projection(row:InvoiceRow):PlanInvoice{
+ row={...row,status:row.lifecycle_status??row.status};
  const terms=parseTerms(row);
  return {id:row.id,planId:row.plan_id,itemId:row.item_id,memberId:row.member_id,revision:row.revision,amount:row.amount,
-  minimum:row.minimum,paid:row.paid,outstanding:row.amount-row.paid,currency:'CAD',due:terms.due,dueAt:terms.dueAt,allowPartial:terms.allowPartial,approvedMembers:JSON.parse(row.approved_members),
+  minimum:row.minimum,paid:row.paid,outstanding:['closed','refunded'].includes(row.status)?0:row.amount-row.paid,currency:'CAD',due:terms.due,dueAt:terms.dueAt,allowPartial:terms.allowPartial,approvedMembers:JSON.parse(row.approved_members),
   recipientEmail:terms.email,providerId:row.provider_id,status:row.status,providerStatus:row.provider_status,version:row.version,
   created:row.created,updated:row.updated,paymentUrl:['sent','partially-paid','paid'].includes(row.status)?row.provider_url:null,requiresReview:row.status==='needs-review'};
 }
@@ -71,10 +73,10 @@ function cents(value:any,zero=false){
 }
 function sameApproved(scope:InvoiceScope,terms:Terms){
  const item=scope.record.state.items.find(value=>value.id===terms.itemId);
- if(!item||item.revision!==terms.revision||item.name!==terms.itemName||item.shares[terms.memberId]!==terms.amount||
+ if(!item||item.revision!==terms.revision||item.name!==terms.itemName||(item.collection?.due[terms.memberId]??item.shares[terms.memberId])!==terms.amount||
   item.status==='cancelled'||!(item.required??item.participants).every(id=>item.approvals.includes(id))||
   JSON.stringify({name:item.name,price:item.price,participants:item.participants,shares:item.shares,required:item.required??item.participants,
-   approvals:item.approvals,source:item.source})!==terms.approvedSnapshot)
+   approvals:item.approvals,source:item.source,...(item.collection?{collection:item.collection}:{})})!==terms.approvedSnapshot)
   throw new BackendError('INVOICE_APPROVAL_CHANGED','Invoice terms no longer match the approved item. Cancel this invoice and approve a new revision.',409);
  requireMerchantCheckout(item);requirePayPalCurrency(scope.record.state.plan);
  if(item.expires&&(!Number.isFinite(Date.parse(item.expires))||Date.parse(item.expires)<=Date.now()))
@@ -82,7 +84,7 @@ function sameApproved(scope:InvoiceScope,terms:Terms){
 }
 
 /** Verify fetched invoice evidence; browser-provided totals never enter the ledger. */
-export function verifiedInvoicePayments(row:InvoiceRow,data:any):{payments:InvoicePayment[];paid:number;status:InvoiceStatus;providerStatus:string;providerUrl:string|null}{
+export function verifiedInvoicePayments(row:InvoiceRow,data:any):{payments:InvoicePayment[];refunds:InvoiceRefund[];paid:number;status:InvoiceStatus;providerStatus:string;providerUrl:string|null}{
  const terms=parseTerms(row),bad=()=>new BackendError('INVOICE_EVIDENCE','PayPal invoice evidence does not match its approved terms. Merchant review is required.',409);
  if(!row.provider_id||data.id!==row.provider_id||data.detail?.currency_code!=='CAD'||data.detail?.reference!==terms.reference||
   data.detail?.invoice_number!==terms.invoiceNumber||data.detail?.payment_term?.due_date!==terms.due||
@@ -91,8 +93,7 @@ export function verifiedInvoicePayments(row:InvoiceRow,data:any):{payments:Invoi
   cents(data.items[0]?.unit_amount)!==terms.amount||cents(data.amount)!==terms.amount||
   data.configuration?.allow_tip!==false||data.configuration?.partial_payment?.allow_partial_payment!==terms.allowPartial||
   (terms.allowPartial&&cents(data.configuration?.partial_payment?.minimum_amount_due)!==terms.minimum)||
-  (data.gratuity&&cents(data.gratuity,true)!==0)||(data.refunds?.refund_amount&&cents(data.refunds.refund_amount,true)!==0)||
-  (data.refunds?.transactions?.length??0)>0)throw bad();
+  (data.gratuity&&cents(data.gratuity,true)!==0))throw bad();
  const transactions=data.payments?.transactions??[],payments:InvoicePayment[]=[],seen=new Set<string>();
  if(!Array.isArray(transactions)||transactions.length>100)throw bad();
  for(const payment of transactions){
@@ -104,13 +105,30 @@ export function verifiedInvoicePayments(row:InvoiceRow,data:any):{payments:Invoi
    evidence:`Server-verified PayPal sandbox invoice ${row.provider_id}. Partial payments are buyer initiated; booking confirmation is separate.`}});
  }
  const paid=payments.reduce((sum,payment)=>sum+payment.amount,0);
+ const refunds:InvoiceRefund[]=[],refundIds=new Set<string>();
+ if(!Array.isArray(data.refunds?.transactions??[])||(data.refunds?.transactions?.length??0)>100)throw bad();
+ for(const refund of data.refunds?.transactions??[]){if(refund.type!=='PAYPAL'||typeof refund.refund_id!=='string'||!/^[A-Za-z0-9-]{1,64}$/.test(refund.refund_id)||refundIds.has(refund.refund_id))throw bad();refundIds.add(refund.refund_id);const amount=cents(refund.amount);refunds.push({id:refund.refund_id,amount,body:JSON.stringify({id:refund.refund_id,amount,currency:'CAD',invoiceId:row.provider_id})});}
+ const refunded=refunds.reduce((sum,refund)=>sum+refund.amount,0);
+ if(refunded>paid||(data.refunds?.refund_amount&&cents(data.refunds.refund_amount,true)!==refunded))throw bad();
  if(paid>row.amount||paid<row.paid||(data.payments?.paid_amount&&cents(data.payments.paid_amount,true)!==paid)||
-  (data.due_amount&&cents(data.due_amount,true)!==row.amount-paid))throw bad();
+  (data.due_amount&&cents(data.due_amount,true)!==row.amount-paid&&!(refunded>0&&cents(data.due_amount,true)===0)))throw bad();
  const status=String(data.status??'');
- if(!['DRAFT','SENT','SCHEDULED','UNPAID','PARTIALLY_PAID','PAID','CANCELLED','PAYMENT_PENDING'].includes(status)||
-  ((status==='PAID')!==(paid===row.amount))||((status==='PARTIALLY_PAID')!==(paid>0&&paid<row.amount))||
+ if(!['DRAFT','SENT','SCHEDULED','UNPAID','PARTIALLY_PAID','PAID','CANCELLED','PAYMENT_PENDING','REFUNDED','PARTIALLY_REFUNDED'].includes(status)||
+  (!refunded&&(((status==='PAID')!==(paid===row.amount))||((status==='PARTIALLY_PAID')!==(paid>0&&paid<row.amount))))||
+  (status==='REFUNDED'&&(!refunded||refunded!==paid))||(status==='PARTIALLY_REFUNDED'&&(!refunded||refunded>=paid))||
   (status==='DRAFT'&&paid>0)||(status==='CANCELLED'&&paid>0))throw bad();
- return {payments,paid,providerStatus:status,providerUrl:invoiceUrl(data),status:paid===row.amount?'paid':paid>0?'partially-paid':status==='DRAFT'?'draft':status==='CANCELLED'?'cancelled':'sent'};
+ return {payments,refunds,paid,providerStatus:status,providerUrl:invoiceUrl(data),status:refunded===paid&&refunded>0?'refunded':refunded>0?'partially-refunded':paid===row.amount?'paid':paid>0?'partially-paid':status==='DRAFT'?'draft':status==='CANCELLED'?'cancelled':'sent'};
+}
+
+/** A partially collected invoice can close only after approved merchant terms are verified. */
+async function verifyInvoiceEvidence(database:D1Database,row:InvoiceRow,data:any){
+ const closure=await database.prepare('SELECT c.amount,c.change_id FROM invoice_collection_closures c JOIN plan_changes p ON p.id=c.change_id WHERE c.invoice_id=? AND p.owner=? AND p.plan_id=? AND p.status<>\'cancelled\' AND NOT EXISTS(SELECT 1 FROM json_each(p.body,\'$.required\') m WHERE NOT EXISTS(SELECT 1 FROM plan_change_approvals a WHERE a.change_id=p.id AND a.member_id=m.value))').bind(row.id,row.owner,row.plan_id).first<{amount:number;change_id:string}>();
+ if(closure&&data.amount?.value===(closure.amount/100).toFixed(2)&&data.due_amount?.value==='0.00'&&['PAID','REFUNDED','PARTIALLY_REFUNDED'].includes(data.status)){
+  const terms={...parseTerms(row),amount:closure.amount,minimum:closure.amount,allowPartial:false};
+  const evidence=verifiedInvoicePayments({...row,amount:closure.amount,terms:JSON.stringify(terms)},data);
+  return {...evidence,status:'closed' as InvoiceStatus,collectionClosed:true};
+ }
+ return verifiedInvoicePayments(row,data);
 }
 
 export class PlanInvoiceRepository {
@@ -118,7 +136,7 @@ export class PlanInvoiceRepository {
  private async row(scope:InvoiceScope,id:string){
   const row=await this.database.prepare(`SELECT * FROM plan_invoices WHERE id=? AND owner=? AND plan_id=? AND ${access}`)
    .bind(id,scope.record.owner,scope.record.state.plan.id!,scope.memberId).first<InvoiceRow>();
-  if(!row)throw unavailable();return row;
+  if(!row)throw unavailable();return {...row,status:row.lifecycle_status??row.status};
  }
  async get(scope:InvoiceScope,id:string){return projection(await this.row(scope,id));}
  async list(scope:InvoiceScope){
@@ -151,7 +169,7 @@ export class PlanInvoiceRepository {
   const terms:Terms={planId:state.plan.id!,itemId:item.id,itemName:item.name,memberId:input.memberId,revision:item.revision,
    amount,currency:'CAD',email:input.email,due:input.due,dueAt:input.dueAt,allowPartial:input.allowPartial,minimum:input.minimum,
    reference:`pr:${id}`,invoiceNumber:`PR${id.slice(0,20)}`,approvedSnapshot:JSON.stringify({name:item.name,price:item.price,
-    participants:item.participants,shares:item.shares,required:item.required??item.participants,approvals:item.approvals,source:item.source})};
+    participants:item.participants,shares:item.shares,required:item.required??item.participants,approvals:item.approvals,source:item.source,...(item.collection?{collection:item.collection}:{})})};
   const localDay=new Intl.DateTimeFormat('en-CA',{timeZone:state.plan.timezone,year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(input.dueAt));
   if(localDay!==input.due)throw new BackendError('INVOICE_DEADLINE','The reminder deadline must fall on the invoice due date in the plan time zone.');
   await this.effects.claim(scope,id,item.id,item.revision,input.memberId);
@@ -187,7 +205,7 @@ export class PlanInvoiceRepository {
     if(!saved.meta.changes)throw conflict();row={...row,provider_id:providerId};
    }
    const data=await this.provider(`/v2/invoicing/invoices/${encodeURIComponent(row.provider_id!)}`);
-   const verified=verifiedInvoicePayments(row,data);
+   const verified=await verifyInvoiceEvidence(this.database,row,data);
    if(verified.status!=='draft'||verified.paid!==0)throw new BackendError('INVOICE_EVIDENCE','A newly created invoice must remain an unpaid draft.',409);
    await this.finish(row,lease,verified.status,verified.providerStatus,0,verified.providerUrl);
    return this.get(scope,row.id);
@@ -210,8 +228,8 @@ export class PlanInvoiceRepository {
   if(!result.meta.changes)throw conflict();
  }
  private async fail(row:InvoiceRow,lease:string,error:unknown,review:boolean){
-  await this.database.prepare(`UPDATE plan_invoices SET lease_token=NULL,lease_until=0,last_error=?,status=CASE WHEN ?=1 THEN 'needs-review' ELSE status END,
-   updated=? WHERE id=? AND owner=? AND lease_token=?`).bind(error instanceof BackendError?error.code:'PROVIDER_RETRY_REQUIRED',review?1:0,now(),row.id,row.owner,lease).run();
+  await this.database.prepare(`UPDATE plan_invoices SET lease_token=NULL,lease_until=0,last_error=?,status=CASE WHEN ?=1 THEN 'needs-review' ELSE status END,lifecycle_status=CASE WHEN ?=1 THEN 'needs-review' ELSE lifecycle_status END,
+   updated=? WHERE id=? AND owner=? AND lease_token=?`).bind(error instanceof BackendError?error.code:'PROVIDER_RETRY_REQUIRED',review?1:0,review?1:0,now(),row.id,row.owner,lease).run();
  }
  async act(scope:InvoiceScope,id:string,input:z.infer<typeof invoiceActionRequest>){
   if(!['owner','editor'].includes(scope.record.role))throw forbidden();
@@ -244,7 +262,7 @@ export class PlanInvoiceRepository {
   try{
    const path=`/v2/invoicing/invoices/${encodeURIComponent(row.provider_id)}`;
    if(input.action==='send'){
-    const current=verifiedInvoicePayments(row,await this.provider(path));
+    const current=await verifyInvoiceEvidence(this.database,row,await this.provider(path));
     if(current.status==='draft'){
      const started=await this.database.prepare(`UPDATE plan_invoices SET status='sending',updated=? WHERE id=? AND lease_token=?
       AND EXISTS(SELECT 1 FROM plans WHERE owner=? AND id=? AND version=? AND status='active')`)
@@ -253,7 +271,7 @@ export class PlanInvoiceRepository {
      await this.provider(`${path}/send`,'POST',{send_to_recipient:true,send_to_invoicer:false},(await hash(`${row.id}:send`)).slice(0,38));
     }else if(current.status!=='sent')throw new BackendError('INVOICE_STATE','This invoice has changed and needs review.',409);
    }else if(input.action==='cancel'){
-    const current=verifiedInvoicePayments(row,await this.provider(path));
+    const current=await verifyInvoiceEvidence(this.database,row,await this.provider(path));
     if(current.paid>0)throw new BackendError('INVOICE_STATE','A payment arrived. Review its refund before cancellation.',409);
     if(current.status!=='cancelled'){
      await this.database.prepare("UPDATE plan_invoices SET status='cancelling',updated=? WHERE id=? AND lease_token=?").bind(now(),row.id,lease).run();
@@ -263,8 +281,8 @@ export class PlanInvoiceRepository {
      return this.get(scope,id);
     }
    }
-   const data=await this.provider(path),verified=verifiedInvoicePayments(row,data);
-   await this.effects.commit(scope,{row,expectedVersion:row.version,payments:verified.payments,paid:verified.paid,status:verified.status,
+   const data=await this.provider(path),verified=await verifyInvoiceEvidence(this.database,row,data);
+   await this.effects.commit(scope,{row,expectedVersion:row.version,payments:verified.payments,refunds:verified.refunds,collectionClosed:'collectionClosed'in verified&&verified.collectionClosed===true,paid:verified.paid,status:verified.status,
     providerStatus:verified.providerStatus,providerUrl:verified.providerUrl,leaseToken:lease,at:now()});
    return this.get(scope,id);
   }catch(error){await this.fail(row,lease,error,error instanceof BackendError&&error.code==='INVOICE_EVIDENCE');throw error;}
@@ -297,29 +315,42 @@ export function invoiceFinancialEffects(database:D1Database):InvoiceEffects {
     await commitFinancialEffect(database,{owner:row.owner,planId:row.plan_id,event:payment.event,statements,
      markPaid:{memberId:row.member_id,revision:row.revision,amount:row.amount}});
    }
+   for(const refund of input.refunds??[]){
+    const current=await database.prepare('SELECT body FROM plans WHERE owner=? AND id=?').bind(row.owner,row.plan_id).first<{body:string}>();if(!current)throw unavailable();
+    const state=JSON.parse(current.body) as State,item=state.items.find(i=>i.id===row.item_id);if(!item)throw unavailable();
+    const existing=await database.prepare('SELECT body FROM invoice_refunds WHERE refund_id=?').bind(refund.id).first<{body:string}>();
+    if(existing&&existing.body!==refund.body)throw new BackendError('INVOICE_EVIDENCE','A refund identity has different saved facts.',409);
+    const priorEvent=state.events.find(e=>e.id===`invoice-refund-${refund.id}`),shares=priorEvent?.shares??(item.funding?Object.fromEntries(Object.entries(allocate(refund.amount,item.participants,'weight',item.shares,state.people?.map(p=>p.id))).map(([id,n])=>[id,-n])):{[row.member_id]:-refund.amount});
+    const event:MoneyEvent={id:`invoice-refund-${refund.id}`,itemId:row.item_id,kind:'refund',label:'Verified sandbox invoice refund',shares,contributions:{[row.member_id]:-refund.amount},amount:-refund.amount,status:'confirmed',mode:'sandbox',providerId:refund.id,created:input.at,evidence:`Canonical PayPal invoice ${row.provider_id} refund ${refund.id}. Bank availability is unverified.`};
+    const guard=crypto.randomUUID();await commitFinancialEffect(database,{owner:row.owner,planId:row.plan_id,event,statements:[
+     database.prepare("INSERT INTO backend_write_guards(id,valid) VALUES (?,CASE WHEN EXISTS(SELECT 1 FROM plan_invoices WHERE id=? AND owner=? AND version=? AND lease_token=?) AND (EXISTS(SELECT 1 FROM invoice_refunds WHERE refund_id=? AND body=?) OR ?<=(SELECT paid FROM plan_invoices WHERE id=?)-(SELECT COALESCE(SUM(amount),0) FROM invoice_refunds WHERE invoice_id=?)) THEN 1 ELSE 0 END)").bind(guard,row.id,row.owner,expectedVersion,leaseToken,refund.id,refund.body,refund.amount,row.id,row.id),
+     database.prepare('INSERT OR IGNORE INTO invoice_refunds(refund_id,invoice_id,owner,plan_id,amount,body,created) VALUES (?,?,?,?,?,?,?)').bind(refund.id,row.id,row.owner,row.plan_id,refund.amount,refund.body,input.at),database.prepare('DELETE FROM backend_write_guards WHERE id=?').bind(guard)]});
+   }
    const guard=crypto.randomUUID();
    await database.batch([
     database.prepare(`INSERT INTO backend_write_guards(id,valid) VALUES (?,CASE WHEN EXISTS(SELECT 1 FROM plan_invoices
      WHERE id=? AND owner=? AND version=? AND lease_token=? AND paid=? AND paid=(SELECT COALESCE(SUM(amount),0)
       FROM plan_invoice_payments WHERE invoice_id=?)) THEN 1 ELSE 0 END)`)
      .bind(guard,row.id,row.owner,expectedVersion,leaseToken,input.paid,row.id),
-    database.prepare(`UPDATE plan_invoices SET status=?,provider_status=?,provider_url=COALESCE(?,provider_url),version=version+1,lease_token=NULL,lease_until=0,
+    database.prepare(`UPDATE plan_invoices SET status=?,lifecycle_status=?,provider_status=?,provider_url=COALESCE(?,provider_url),version=version+1,lease_token=NULL,lease_until=0,
      last_error=NULL,updated=? WHERE id=? AND owner=? AND version=? AND lease_token=?`)
-     .bind(input.status,input.providerStatus,input.providerUrl,input.at,row.id,row.owner,expectedVersion,leaseToken),
+     .bind(input.status==='closed'?'paid':['refunded','partially-refunded'].includes(input.status)?'needs-review':input.status,input.status,input.providerStatus,input.providerUrl,input.at,row.id,row.owner,expectedVersion,leaseToken),
     database.prepare('DELETE FROM backend_write_guards WHERE id=?').bind(guard),
+    database.prepare("UPDATE invoice_refund_requests SET status='completed' WHERE invoice_id=? AND status='awaiting-merchant' AND amount<=(SELECT COALESCE(SUM(r.amount),0) FROM invoice_refunds r WHERE r.invoice_id=invoice_refund_requests.invoice_id AND r.refund_id NOT IN (SELECT value FROM json_each(invoice_refund_requests.terms,'$.previousRefunds')))").bind(row.id),
+    ...(input.collectionClosed||input.status==='closed'?[database.prepare("UPDATE invoice_collection_closures SET status='verified' WHERE invoice_id=?").bind(row.id)]:[]),
    ]);
   },
  };
 }
 
 /** Server recovery jobs only: read existing canonical invoices, never create or send. */
-export async function reconcilePendingPlanInvoices(database:D1Database,provider:InvoiceProvider,options:{owner:string;limit?:number}){
+export async function reconcilePendingPlanInvoices(database:D1Database,provider:InvoiceProvider,options:{owner:string;limit?:number;invoiceId?:string}){
  const limit=Math.min(10,Math.max(1,Math.floor(options.limit??10))),results:{id:string;status:string}[]=[];
  const rows=await database.prepare(`SELECT * FROM plan_invoices WHERE owner=? AND provider_id IS NOT NULL
-  AND status IN ('creating','sending','sent','partially-paid','needs-review') AND lease_until<=? ORDER BY updated,id LIMIT ?`)
-  .bind(options.owner,Date.now(),limit).all<InvoiceRow>();
+  AND ${options.invoiceId?'id=?':"COALESCE(lifecycle_status,status) IN ('creating','sending','sent','partially-paid','needs-review','paid','partially-refunded','closed')"} AND lease_until<=? ORDER BY updated,id LIMIT ?`)
+  .bind(options.owner,...(options.invoiceId?[options.invoiceId]:[]),Date.now(),limit).all<InvoiceRow>();
  const effects=invoiceFinancialEffects(database);
- for(const row of rows.results){
+ for(const rawRow of rows.results){const row={...rawRow,status:rawRow.lifecycle_status??rawRow.status};
   const token=crypto.randomUUID();
   const leased=await database.prepare('UPDATE plan_invoices SET lease_token=?,lease_until=? WHERE id=? AND owner=? AND version=? AND lease_until<=?')
    .bind(token,Date.now()+60000,row.id,options.owner,row.version,Date.now()).run();
@@ -328,16 +359,20 @@ export async function reconcilePendingPlanInvoices(database:D1Database,provider:
    const plan=await database.prepare('SELECT body,version FROM plans WHERE owner=? AND id=?').bind(row.owner,row.plan_id).first<{body:string;version:number}>();
    if(!plan)throw new BackendError('INVOICE_PLAN_MISSING','This invoice needs merchant review.',409);
    const record:PlanRecord={owner:row.owner,state:JSON.parse(plan.body),version:plan.version,role:'owner'};
-   const evidence=verifiedInvoicePayments(row,await provider(`/v2/invoicing/invoices/${encodeURIComponent(row.provider_id!)}`));
-   await effects.commit({record,memberId:row.member_id},{row,expectedVersion:row.version,payments:evidence.payments,paid:evidence.paid,
+   const evidence=await verifyInvoiceEvidence(database,row,await provider(`/v2/invoicing/invoices/${encodeURIComponent(row.provider_id!)}`));
+   await effects.commit({record,memberId:row.member_id},{row,expectedVersion:row.version,payments:evidence.payments,refunds:evidence.refunds,collectionClosed:'collectionClosed'in evidence&&evidence.collectionClosed===true,paid:evidence.paid,
     status:evidence.status,providerStatus:evidence.providerStatus,providerUrl:evidence.providerUrl,leaseToken:token,at:now()});
    results.push({id:row.id,status:evidence.status});
   }catch(error){
    const review=error instanceof BackendError&&['INVOICE_EVIDENCE','INVOICE_PLAN_MISSING','FINANCIAL_EFFECT_CONFLICT'].includes(error.code);
-   await database.prepare(`UPDATE plan_invoices SET lease_token=NULL,lease_until=0,status=CASE WHEN ?=1 THEN 'needs-review' ELSE status END,
-    last_error=?,updated=? WHERE id=? AND owner=? AND lease_token=?`).bind(review?1:0,error instanceof BackendError?error.code:'PROVIDER_RETRY_REQUIRED',now(),row.id,row.owner,token).run();
+   await database.prepare(`UPDATE plan_invoices SET lease_token=NULL,lease_until=0,status=CASE WHEN ?=1 THEN 'needs-review' ELSE status END,lifecycle_status=CASE WHEN ?=1 THEN 'needs-review' ELSE lifecycle_status END,
+    last_error=?,updated=? WHERE id=? AND owner=? AND lease_token=?`).bind(review?1:0,review?1:0,error instanceof BackendError?error.code:'PROVIDER_RETRY_REQUIRED',now(),row.id,row.owner,token).run();
    results.push({id:row.id,status:review?'needs-review':'retry'});
   }
  }
  return {scanned:rows.results.length,results};
+}
+export async function reconcileInvoiceNotification(database:D1Database,providerId:string,fetchInvoice:(id:string)=>Promise<unknown>){
+ const row=await database.prepare('SELECT id,owner FROM plan_invoices WHERE provider_id=?').bind(providerId).first<{id:string;owner:string}>();if(!row)throw new BackendError('INVOICE_UNAVAILABLE','The saved invoice is not yet available.',409);
+ const result=await reconcilePendingPlanInvoices(database,()=>fetchInvoice(providerId),{owner:row.owner,invoiceId:row.id,limit:1});if(!result.results.length||['needs-review','retry'].includes(result.results[0].status))throw new BackendError('INVOICE_RETRY','Saved invoice evidence needs another check.',503);return result;
 }

@@ -1,6 +1,7 @@
 import {BackendError,conflict} from './backend-errors.ts';
 import {PlanRepository} from './plan-repository.ts';
 import type {Identity} from './people.ts';
+import {savedToolResults} from './agent-checkpoints.ts';
 
 type Row={id:string;owner:string;member_id:string;plan_id:string|null;context_actor:string;title:string;version:number;lease_token:string|null;lease_until:number;created:string;updated:string};
 type Message={id:string;role:'user'|'assistant';text:string;mode:string;metadata:string;created:string};
@@ -35,7 +36,7 @@ export class ConversationRepository{
   const records=await this.database.prepare(`SELECT * FROM assistant_messages WHERE conversation_id=? ${cursor?'AND (created<? OR (created=? AND id<?))':''} ORDER BY created DESC,id DESC LIMIT 51`).bind(id,...(cursor?[cursor.created,cursor.created,cursor.id]:[])).all<Message>();
   const limited=records.results.slice(0,50),messages=limited.reverse().map(message=>({...message,metadata:JSON.parse(message.metadata)}));
   return {id:row.id,title:row.title,planId:row.plan_id,contextActor:row.context_actor,version:row.version,messages,hasMore:records.results.length>50,nextBefore:records.results.length>50?messages[0]?.id:null,
-   pending:!!row.lease_token&&row.lease_until>Date.now(),pendingUntil:row.lease_until,planVersion:plan?.version??null};
+   prepared:await savedToolResults(this.database,owner,identity.id,id),pending:!!row.lease_token&&row.lease_until>Date.now(),pendingUntil:row.lease_until,planVersion:plan?.version??null};
  }
  async begin(owner:string,identity:Identity,id:string,expected:number,requestId:string,input:string,actor=''){
   const {row,plan}=await this.accessible(owner,identity,id,actor);

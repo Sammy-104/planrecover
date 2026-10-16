@@ -5,17 +5,19 @@ import {PlanChangeService} from './plan-changes.ts';
 import {BackendError,conflict,forbidden} from './backend-errors.ts';
 import {planCurrency} from './money.ts';
 import type {Identity} from './people.ts';
+import {projectSupplierBooking} from './supplier-bookings.ts';
 const identifier=z.string().regex(/^[A-Za-z0-9._:-]{1,180}$/);
 const quote=z.object({sandbox:z.literal(true),quoteId:identifier,itemId:identifier,revision:z.number().int().positive(),amount:z.number().int().nonnegative().max(1e12),currency:z.string().regex(/^[A-Z]{3}$/),expiresAt:z.string().datetime({offset:true}),available:z.boolean(),terms:z.string().min(1).max(5000),sourceUrl:z.string().url().refine(u=>u.startsWith('https://'))}).strict();
 const booking=z.object({sandbox:z.literal(true),requestId:identifier,bookingId:identifier,quoteId:identifier,status:z.enum(['confirmed','pending','cancelled','failed']),amount:z.number().int().nonnegative().max(1e12),currency:z.string().regex(/^[A-Z]{3}$/)}).strict();
 export const supplierRequest=z.object({operation:z.enum(['quote','book','cancel','status']),requestId:z.string().uuid(),version:z.number().int().nonnegative(),itemId:identifier,revision:z.number().int().positive(),quoteOperationId:z.string().uuid().optional(),bookingOperationId:z.string().uuid().optional(),changeId:z.string().uuid().optional(),confirm:z.boolean().optional()}).strict();
 export async function runSupplierOperation(database:D1Database,env:Env,planId:string,identity:Identity,input:z.infer<typeof supplierRequest>,fetcher:typeof fetch=fetch){
- const repository=new PlanRepository(database),record=await repository.getPlan(planId,identity);if(record.role!=='owner')throw forbidden();if(record.version!==input.version)throw conflict();
+ const repository=new PlanRepository(database),record=await repository.getPlan(planId,identity);if(record.role!=='owner')throw forbidden();
  const item=record.state.items.find(i=>i.id===input.itemId);if(!item||item.revision!==input.revision)throw conflict();
  const config=providerConfig(env,'SUPPLIER');if(!config)throw new BackendError('SUPPLIER_UNCONFIGURED','The owner must configure a sandbox supplier adapter.',503);
  if(env.SUPPLIER_MODE!=='sandbox')throw new BackendError('SUPPLIER_MODE','Only explicitly configured sandbox suppliers are enabled.',503);
  const existing=await database.prepare('SELECT * FROM adapter_operations WHERE id=? AND owner=? AND plan_id=? AND provider=?').bind(input.requestId,record.owner,planId,'supplier').first<{request:string;response:string|null;status:string;lease_until:number}>();
- const request={...input};if(existing&&existing.request!==JSON.stringify(request))throw conflict();if(existing?.status==='completed')return JSON.parse(existing.response!);
+ const request={...input};if(existing&&existing.request!==JSON.stringify(request))throw conflict();if(existing?.status==='completed'){const saved=JSON.parse(existing.response!);if(input.operation!=='quote')await projectSupplierBooking(database,planId,identity,item.id,item.revision,input.bookingOperationId??input.requestId,booking.parse(saved));return saved;}
+ if(record.version!==input.version)throw conflict();
  const body:Record<string,unknown>={sandbox:true,requestId:input.requestId,item:{id:item.id,revision:item.revision,name:item.name,start:item.start,duration:item.duration,participants:item.participants.length,currency:planCurrency(record.state.plan)}};
  async function prior(id:string|undefined,kind:string){if(!id)throw new BackendError('SUPPLIER_REFERENCE','Select a saved provider quote or booking.');const row=await database.prepare("SELECT response,request FROM adapter_operations WHERE id=? AND owner=? AND plan_id=? AND provider='supplier' AND kind=? AND status='completed'").bind(id,record.owner,planId,kind).first<{response:string;request:string}>();if(!row)throw forbidden();const original=JSON.parse(row.request);if(original.itemId!==item!.id||original.revision!==item!.revision)throw conflict();return JSON.parse(row.response);}
  if(input.operation==='book'){
@@ -25,7 +27,7 @@ export async function runSupplierOperation(database:D1Database,env:Env,planId:st
   const paid=record.state.events.filter(e=>e.itemId===item.id&&e.status==='confirmed'&&['expense','refund'].includes(e.kind)&&e.mode==='sandbox'&&e.providerId).reduce((n,e)=>n+e.amount,0);if(paid!==saved.amount)throw new BackendError('SUPPLIER_FUNDING','Verified sandbox payments must match this quote exactly.',409);body.quoteId=saved.quoteId;body.amount=saved.amount;
  }
  if(input.operation==='cancel'||input.operation==='status'){
-  const saved=booking.parse(await prior(input.bookingOperationId,'book'));body.bookingId=saved.bookingId;
+  const saved=booking.parse(await prior(input.bookingOperationId,'book'));body.bookingId=saved.bookingId;body.quoteId=saved.quoteId;body.amount=saved.amount;
   if(input.operation==='cancel'){
    if(input.confirm!==true||!input.changeId||env.SUPPLIER_BOOKING_ENABLED!=='true')throw forbidden();const change=await new PlanChangeService(database).get(planId,identity,input.changeId);
    if(!change.fullyApproved||change.status!=='review'||change.terms.kind!=='recovery'||change.terms.option==='keep'||!change.terms.originals.some(i=>i.id===item.id&&i.revision===item.revision))throw forbidden();body.changeId=change.id;
@@ -37,7 +39,29 @@ export async function runSupplierOperation(database:D1Database,env:Env,planId:st
  try{const fresh=await repository.getPlan(planId,identity);if(fresh.version!==record.version)throw conflict();
   const result=await providerPost(config,'/'+input.operation,body,input.requestId,fetcher),checked=input.operation==='quote'?quote.parse(result):booking.parse(result);
   if('itemId' in checked&&(checked.itemId!==item.id||checked.revision!==item.revision)||checked.currency!==planCurrency(record.state.plan)||'requestId' in checked&&checked.requestId!==input.requestId||input.operation==='book'&&('quoteId' in checked&&checked.quoteId!==body.quoteId||checked.amount!==body.amount))throw new BackendError('SUPPLIER_EVIDENCE','Provider evidence does not match the saved request.',502);
+  if(input.operation==='status'||input.operation==='cancel'){if(!('bookingId'in checked)||checked.bookingId!==body.bookingId||checked.quoteId!==body.quoteId||checked.amount!==body.amount)throw new BackendError('SUPPLIER_EVIDENCE','The supplier changed the booking identity or amount.',502);}
   const saved=await database.prepare("UPDATE adapter_operations SET status='completed',response=?,lease_token=NULL,lease_until=0,updated=? WHERE id=? AND lease_token=?").bind(JSON.stringify(checked),new Date().toISOString(),input.requestId,token).run();if(!saved.meta.changes)throw conflict();
-  const current=await repository.getPlan(planId,identity);if(current.role!=='owner'||current.version!==record.version)throw conflict();return checked;
+  const current=await repository.getPlan(planId,identity);if(current.role!=='owner'||current.version!==record.version)throw conflict();if(input.operation!=='quote')await projectSupplierBooking(database,planId,identity,item.id,item.revision,input.bookingOperationId??input.requestId,booking.parse(checked));return checked;
  }catch(error){await database.prepare("UPDATE adapter_operations SET status='uncertain',lease_token=NULL,lease_until=0,updated=? WHERE id=? AND lease_token=?").bind(new Date().toISOString(),input.requestId,token).run();throw error;}
+}
+
+/** Read-only status reconciliation; this worker never submits a booking or cancellation. */
+export async function reconcileSupplierOperations(database:D1Database,env:Env,owner:string,fetcher:typeof fetch=fetch){
+ const config=providerConfig(env,'SUPPLIER');if(!config||env.SUPPLIER_MODE!=='sandbox')return {configured:false,checked:0};
+ const rows=await database.prepare(`SELECT a.id,a.plan_id,a.member_id,a.request,a.response FROM adapter_operations a LEFT JOIN supplier_bookings b ON b.owner=a.owner AND b.operation_id=a.id
+ WHERE a.owner=? AND a.provider='supplier' AND a.kind='book' AND (a.status='uncertain' OR b.status IN ('pending','confirmed') OR a.status='completed' AND b.operation_id IS NULL) ORDER BY a.updated,a.id LIMIT 3`).bind(owner).all<{id:string;plan_id:string;member_id:string;request:string;response:string|null}>();
+ let checked=0,review=0;
+ for(const row of rows.results)try{
+  const input=JSON.parse(row.request),identity={id:row.member_id,name:'Plan owner'},record=await new PlanRepository(database).getPlan(row.plan_id,identity),item=record.state.items.find(i=>i.id===input.itemId);
+  if(record.role!=='owner'||!item||item.revision!==input.revision)throw conflict();
+  const key=`status-${row.id}-${Math.floor(Date.now()/60000)}`,priorResponse=row.response?booking.parse(JSON.parse(row.response)):null;
+  const result=booking.parse(await providerPost(config,'/status',{sandbox:true,requestId:key,originalRequestId:row.id,...(priorResponse?{bookingId:priorResponse.bookingId}:{})},key,fetcher));
+  if(result.requestId!==key||priorResponse&&(result.bookingId!==priorResponse.bookingId||result.quoteId!==priorResponse.quoteId))throw conflict();
+  // Unknown booking identities must still match the original approved quote.
+  const quoteRow=await database.prepare("SELECT response FROM adapter_operations WHERE id=? AND owner=? AND plan_id=? AND kind='quote' AND status='completed'").bind(input.quoteOperationId,owner,row.plan_id).first<{response:string}>();
+  if(!quoteRow||quote.parse(JSON.parse(quoteRow.response)).quoteId!==result.quoteId)throw conflict();
+  await projectSupplierBooking(database,row.plan_id,identity,item.id,item.revision,row.id,result);
+  await database.prepare("UPDATE adapter_operations SET status='completed',response=?,updated=? WHERE id=? AND owner=? AND request=?").bind(JSON.stringify({...result,requestId:row.id}),new Date().toISOString(),row.id,owner,row.request).run();checked++;
+ }catch{review++;}finally{await database.prepare("UPDATE adapter_operations SET updated=? WHERE id=? AND owner=?").bind(new Date().toISOString(),row.id,owner).run();}
+ return {configured:true,checked,review,providerMutations:false};
 }
