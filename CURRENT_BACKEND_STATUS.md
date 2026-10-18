@@ -14,6 +14,15 @@ The current scope is [CURRENT_SCOPE.md](docs/CURRENT_SCOPE.md). Earlier mileston
 - Transactional payment/change fencing and reviewed outside cancellation/received-refund closure.
 - Fair bounded scheduled batches, backlog reporting, owner-only operational health/review queue, portable dependency installation and CI.
 
+## First backend completion batch
+
+- Added owner-only service readiness inspection and an explicit bounded synthetic Bedrock check. Inspection never contacts providers. Checks retain coarse outcomes and token counts, reuse request IDs, and apply shared AI limits. A synthetic pass does not verify full chat, itinerary or receipt workflows.
+- Added a direct Amazon SES v2 reminder email adapter, disabled by default. The selected email sender is Verified in Canada Central; dedicated restricted credentials and authorized recipient testing are still required. Durable send attempts prevent automatic resending after ambiguous provider or storage results, including provider changes. SES acceptance is distinct from inbox delivery; bounce/complaint event handling remains open.
+- Added a standalone read-only SQLite and receipt-object backup verifier, including independent hash inventories and financial evidence checks. This verifies exported bundles; actual hosted backup creation and restore rehearsal remain open.
+- Prepared the existing PayPal relay for the authenticated Cloudflare account and validated its deployment bundle with a dry run. No public receiver, service credential grant or PayPal webhook registration was created by this preparation.
+
+See [completion progress](docs/BACKEND_COMPLETION_PROGRESS.md), [SES setup](docs/SES_EMAIL_SETUP.md), and [backup verification](docs/BACKUP_VERIFICATION.md).
+
 ## Evidence levels
 
 Code/fixture tests are distinct from configured and hosted-verified services. Consult [the audit resolution report](docs/AUDIT_RESOLUTION.md) for the final test/build/publication result for this source.

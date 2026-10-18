@@ -12,7 +12,7 @@ PlanRecover helps people agree on a shared plan, understand each person's cost a
 - Separate payment, booking and refund states. Captured transactions and original contribution identities survive deletion/restoration and allocation corrections.
 - Recovery comparisons, member departures, independently approved cancellations/refunds, replacement progress and reviewed manual closure for outside cancellations. A manual received-refund record is explicitly human evidence, not provider verification.
 - Plan-linked invoices with recipient-reviewed due times and optional partial-payment minimum. Sending, buyer payments and merchant refunds are separate actions. Invoice refunds require the merchant handoff and distinct canonical refund evidence.
-- Persistent in-app reminders and a recipient inbox. Email/push require a selected delivery service; they are not represented as connected because an opt-in exists.
+- Persistent in-app reminders and a recipient inbox. Amazon SES reminder email is implemented but disabled pending restricted credentials, verified sender/recipients and delivery evidence. Push still requires a selected service and device/subscription integration; an opt-in is not a connection.
 - Saved conversations, ten validated MCP tools, reviewable proposals and a simulated Alexa+ web client. Genuine hosted model output remains dependent on provider access.
 
 Planning/receipt currencies can differ from CAD where the existing money model supports them. There is no automatic FX conversion. Reimbursement handoffs use the exact supported plan currency and precision or explain why no handoff can be built.
@@ -27,7 +27,7 @@ Use Node24 and pinned pnpm11.25.0. CI runs offline application/relay tests, type
 
 ## Explicit extensions
 
-Live supplier inventory, a real Alexa+/Fire TV connection, optional Location/Textract/Step Functions activation, email/push delivery, live PayPal merchant onboarding, one-member group merchant funding, split-tender new receipts, a lending product and FX are extensions. They are not needed to demonstrate the current fictional CAD sandbox scope. Existing adapter code is a contract and testable boundary, not proof a service is active.
+Live supplier inventory, a real Alexa+/Fire TV connection, optional Location/Textract/Step Functions activation, live email/push delivery, live PayPal merchant onboarding, one-member group merchant funding, split-tender new receipts, a lending product and FX are extensions. They are not needed to demonstrate the current fictional CAD sandbox scope. Existing adapter code is a contract and testable boundary, not proof a service is active.
 
 ## Completion evidence
 

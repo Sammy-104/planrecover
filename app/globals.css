@@ -27,6 +27,12 @@
 html{font-size:16px}
 html,body,[data-slot=sidebar-content]{scrollbar-width:none}
 html::-webkit-scrollbar,body::-webkit-scrollbar,[data-slot=sidebar-content]::-webkit-scrollbar{display:none}
+.service-readiness{margin-top:1rem;border-top:1px solid var(--border);padding-top:1rem}
+.service-readiness .section-top{gap:1rem;flex-wrap:wrap}
+.service-readiness p{margin:.65rem 0;line-height:1.6}
+.service-readiness-list{margin:1rem 0}
+.service-readiness-list>div{display:flex;justify-content:space-between;gap:.5rem 1.25rem;flex-wrap:wrap;padding:.65rem 0;border-bottom:1px solid var(--border)}
+.service-readiness-list dt{font-weight:600}.service-readiness-list dd{margin:0;color:var(--muted-foreground);overflow-wrap:anywhere}
 body{background:var(--background);color:var(--foreground);font-family:Inter,"Segoe UI",Arial,sans-serif;line-height:1.55;margin:0}
 button,a,input,textarea{ -webkit-tap-highlight-color:transparent}
 button,a{touch-action:manipulation}

@@ -6,6 +6,10 @@ The project owner is the operator until another operator is assigned. Preserve t
 
 The owner-only `/flows` service panel displays overdue/failed background checks and counts of payments, invoices and adapter operations requiring review. The operations API restricts those records to the owner and selected plan. The 90-minute threshold is an alert threshold, not a guaranteed service level. There is no configured external alert-delivery channel.
 
+The same panel now shows validated service configuration separately from saved verification. Refreshing it never invokes AWS. The explicit Bedrock control makes one synthetic request with at most 128 output tokens and an eight-second provider deadline; verify account access, quotas and applicable credits first. Reuse the saved request after an uncertain browser response. It cannot approve, pay, book, refund or send email.
+
+SES is disabled until private sending settings are supplied. Before activating it, complete [SES setup](SES_EMAIL_SETUP.md), including recipient consent and verified addresses. An uncertain SES send is a manual-review operation; do not erase attempts or create a replacement reminder to force a retry. A known SES MessageId proves acceptance, not inbox delivery.
+
 1. Inspect the saved operation and its last canonical provider result. Preserve the original request key and transaction identity.
 2. For a missing order result, use the existing bounded reconciliation path. Never issue a new capture/refund to discover whether the original succeeded.
 3. Resolve a paid/booking-failed condition through the displayed compensation review. Payment evidence and booking status are independent.
@@ -27,6 +31,8 @@ After publishing a changed writer, exercise it through supported Site service ac
 Before any hosted financial release or data migration, take a supported database export/restore point and an inventory/copy of referenced private receipt objects. The operator must select retention/storage appropriate to the hosting account; repository source is not a data backup.
 
 Baseline target for the small private demo: no unbacked schema/data migration, a recovery point no older than24 hours during active use, and a rehearsed recovery within4 hours. These are operational targets awaiting hosted rehearsal, not measured guarantees.
+
+Run the [offline verifier](BACKUP_VERIFICATION.md) against the standalone exported SQLite file, exported receipt bytes and an independently preserved hash inventory before and after rehearsal. A verifier pass does not prove that the hosting recovery controls work.
 
 Rehearse in an isolated destination:
 
