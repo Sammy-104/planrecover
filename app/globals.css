@@ -23,7 +23,10 @@
 @theme inline{--color-background:var(--background);--color-foreground:var(--foreground);--color-card:var(--card);--color-card-foreground:var(--card-foreground);--color-popover:var(--popover);--color-popover-foreground:var(--popover-foreground);--color-primary:var(--primary);--color-primary-foreground:var(--primary-foreground);--color-secondary:var(--secondary);--color-secondary-foreground:var(--secondary-foreground);--color-muted:var(--muted);--color-muted-foreground:var(--muted-foreground);--color-accent:var(--accent);--color-accent-foreground:var(--accent-foreground);--color-destructive:var(--destructive);--color-border:var(--border);--color-input:var(--input);--color-ring:var(--ring);--color-sidebar:var(--sidebar);--color-sidebar-foreground:var(--sidebar-foreground);--color-sidebar-primary:var(--sidebar-primary);--color-sidebar-primary-foreground:var(--sidebar-primary-foreground);--color-sidebar-accent:var(--sidebar-accent);--color-sidebar-accent-foreground:var(--sidebar-accent-foreground);--color-sidebar-border:var(--sidebar-border);--color-sidebar-ring:var(--sidebar-ring);--radius-sm:.35rem;--radius-md:.5rem;--radius-lg:.75rem;--radius-xl:1rem;--font-sans:Inter,"Segoe UI",Arial,sans-serif;--font-mono:ui-monospace,SFMono-Regular,Consolas,monospace}
 
 *{box-sizing:border-box}
+/* Keep page and navigation scrolling available without visible scrollbar tracks. */
 html{font-size:16px}
+html,body,[data-slot=sidebar-content]{scrollbar-width:none}
+html::-webkit-scrollbar,body::-webkit-scrollbar,[data-slot=sidebar-content]::-webkit-scrollbar{display:none}
 body{background:var(--background);color:var(--foreground);font-family:Inter,"Segoe UI",Arial,sans-serif;line-height:1.55;margin:0}
 button,a,input,textarea{ -webkit-tap-highlight-color:transparent}
 button,a{touch-action:manipulation}
