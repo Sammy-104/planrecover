@@ -710,3 +710,18 @@ export const t_invoice_collection_closures=sqliteTable("invoice_collection_closu
  created:text("created").notNull(),
 },table=>[
 ]);
+
+export const t_invoice_refund_allocations=sqliteTable('invoice_refund_allocations',{
+ request_id:text('request_id').notNull().references(()=>t_invoice_refund_requests.id),
+ refund_id:text('refund_id').notNull().references(()=>t_invoice_refunds.refund_id),
+ amount:integer('amount').notNull(),created:text('created').notNull(),
+},table=>[primaryKey({columns:[table.request_id,table.refund_id]}),index('invoice_refund_allocations_refund').on(table.refund_id),check('invoice_refund_allocation_amount_valid',sql`${table.amount}>0`)]);
+
+export const t_external_recovery_resolutions=sqliteTable('external_recovery_resolutions',{
+ id:text('id').primaryKey().notNull(),owner:text('owner').notNull(),plan_id:text('plan_id').notNull(),item_id:text('item_id').notNull(),
+ body:text('body').notNull(),status:text('status').notNull().default('review'),created:text('created').notNull(),created_by:text('created_by').notNull(),applied_at:text('applied_at'),
+},table=>[foreignKey({columns:[table.owner,table.plan_id],foreignColumns:[t_plans.owner,t_plans.id]}),index('external_recovery_resolutions_scope').on(table.owner,table.plan_id,table.created),check('external_recovery_status_valid',sql`${table.status} IN ('review','completed','cancelled')`)]);
+
+export const t_external_recovery_approvals=sqliteTable('external_recovery_approvals',{
+ resolution_id:text('resolution_id').notNull().references(()=>t_external_recovery_resolutions.id),member_id:text('member_id').notNull(),approved_at:text('approved_at').notNull(),
+},table=>[primaryKey({columns:[table.resolution_id,table.member_id]})]);

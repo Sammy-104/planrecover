@@ -4,6 +4,7 @@ import {BackendError} from '@/lib/backend-errors';
 import {sha256} from '@/lib/financial-history';
 import {invoiceJson} from '@/lib/plan-invoices';
 import {runSavedOwnerJobs} from '@/lib/owner-jobs';
+import {runScheduledOwners} from '@/lib/scheduled-owners';
 /** Separate service authorization; the Sites service gateway supplies no visitor identity. */
 export async function POST(request:Request){try{
  checkOrigin(request);
@@ -16,9 +17,7 @@ export async function POST(request:Request){try{
  if(different)throw new BackendError('SERVICE_AUTH','The scheduled runner needs its service credential.',401);
  const body=await invoiceJson(request,64);
  if(!body||typeof body!=='object'||Array.isArray(body)||Object.keys(body).length)throw new BackendError('INVALID_JOB_REQUEST','The runner selects only saved workspace records.');
- const owners=await db().prepare(`SELECT w.owner FROM workspaces w LEFT JOIN background_job_runs j ON j.owner=w.owner
-  WHERE COALESCE(j.lease_until,0)<=? AND COALESCE(j.next_at,0)<=? ORDER BY COALESCE(j.last_started,''),w.owner LIMIT 1`)
-  .bind(Date.now(),Date.now()).all<{owner:string}>();
- const results=[];for(const account of owners.results)results.push(await runSavedOwnerJobs(account.owner));
- return Response.json({processed:owners.results.length,results},{headers:{'Cache-Control':'private, no-store'}});
+ const raw=Number((env as unknown as Record<string,string>).JOB_BATCH_SIZE??25);
+ const maxOwners=Number.isInteger(raw)&&raw>=1&&raw<=100?raw:25;
+ return Response.json(await runScheduledOwners(db(),runSavedOwnerJobs,{maxOwners}),{headers:{'Cache-Control':'private, no-store'}});
 }catch(error){return apiError(error);}}

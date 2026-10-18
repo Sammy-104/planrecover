@@ -5,13 +5,13 @@ import {prepareReceiptImage,scanReceiptImage} from '@/lib/browser-receipt-scan';
 import type {ReceiptDraft} from '@/lib/receipt-drafts';
 type JsonFetch=(url:string,init?:RequestInit)=>Promise<any>;
 export function ReceiptScanner({planId,draft,jsonFetch,onResult,onPreview,onBusyChange,sourceHeaders,disabled=false,cloudConnected=false}:{
- planId:string;draft:ReceiptDraft|null;jsonFetch:JsonFetch;onResult:(result:any)=>void;onPreview:(url:string)=>void;onBusyChange:(busy:boolean)=>void;
+ planId:string;draft:ReceiptDraft|null;jsonFetch:JsonFetch;onResult:(result:any)=>void;onPreview:(url:string,mime:string)=>void;onBusyChange:(busy:boolean)=>void;
  sourceHeaders:HeadersInit;disabled?:boolean;cloudConnected?:boolean;
 }){
  const [busy,setBusy]=useState(false),[status,setStatus]=useState(''),[error,setError]=useState(''),[text,setText]=useState(''),[paste,setPaste]=useState(false),[rotation,setRotation]=useState(0);
  const input=useRef<HTMLInputElement>(null),life=useRef<AbortController|null>(null),preview=useRef(''),mounted=useRef(true);
  useEffect(()=>{mounted.current=true;return()=>{mounted.current=false;life.current?.abort();if(preview.current)URL.revokeObjectURL(preview.current);};},[]);
- function showPreview(blob:Blob){if(preview.current)URL.revokeObjectURL(preview.current);preview.current=URL.createObjectURL(blob);onPreview(preview.current);}
+ function showPreview(blob:Blob){if(preview.current)URL.revokeObjectURL(preview.current);preview.current=URL.createObjectURL(blob);onPreview(preview.current,blob.type);}
  function progress(message:string){if(mounted.current)setStatus(message);}
  function start(){life.current?.abort();const controller=new AbortController();life.current=controller;setBusy(true);onBusyChange(true);setError('');return controller;}
  function finish(){if(mounted.current){setBusy(false);onBusyChange(false);}}

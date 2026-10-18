@@ -33,9 +33,11 @@ The first source import is based on application commit `8bd3ed44d97fea2948234ecc
 
 ## Current behavior and limits
 
-Use [the eight backend gap fixes](BACKEND_GAP_FIXES.md) for the current release, alongside the historical [backend expansion](BACKEND_EXPANSION.md). All 49 offline regression suites pass. `/flows` exposes recovery/departure proposals, invoices, private availability and source evidence. `/agent-demo` is a simulated client using the same validated tools as the OAuth MCP transport; it does not establish a physical Alexa+ connection.
+The [October17 audit resolution](docs/AUDIT_RESOLUTION.md) lists each correction and remaining external evidence gate.
 
-PayPal calls remain pinned to sandbox. New external adapters require explicit private configuration and approvals. Pending refunds never fund new payments. Live AWS inference is dependent on the account's quota and the [zero-spend testing policy](docs/project-records/AWS_TESTING_POLICY.md). Provider setup, genuine invoice/multi-account testing, public relay activation and scheduler access remain separate operational work.
+Use [current readiness](CURRENT_BACKEND_STATUS.md) and [scope](docs/CURRENT_SCOPE.md) for current behavior; [the eight backend gap fixes](BACKEND_GAP_FIXES.md) describe the prior release, alongside the historical [backend expansion](BACKEND_EXPANSION.md). Run the full offline suite for this source; the October17 audit fixes add dedicated financial, receipt, browser and operations regressions. `/flows` exposes recovery/departure proposals, invoices, private availability and source evidence. `/agent-demo` is a simulated client using the same validated tools as the OAuth MCP transport; it does not establish a physical Alexa+ connection.
+
+PayPal calls remain pinned to sandbox. New external adapters require explicit private configuration and approvals. Pending refunds never fund new payments. Live AWS inference is dependent on the account's quota and the [zero-spend testing policy](docs/project-records/AWS_TESTING_POLICY.md). Provider setup, genuine invoice/multi-account testing, public relay activation and scheduler access remain separate operational work. See the [judge walkthrough](docs/JUDGE_WALKTHROUGH.md), [operations runbook](docs/OPERATIONS_RUNBOOK.md) and [submission draft](docs/SUBMISSION_DRAFT.md).
 
 ## Relay checks
 

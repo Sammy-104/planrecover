@@ -5,6 +5,7 @@ import {requireMerchantCheckout} from './merchant-scope.ts';
 import type {PlanRecord} from './plan-repository.ts';
 import {allocate,type MoneyEvent,type State} from './model.ts';
 import {claimPaymentFunding,commitFinancialEffect} from './financial-history.ts';
+import {invoiceRefundEvidenceWrites} from './invoice-refund-evidence.ts';
 
 const maxMoney=100_000_000;
 const date=z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(value=>{const d=new Date(`${value}T12:00:00Z`);return !isNaN(d.getTime())&&d.toISOString().slice(0,10)===value;});
@@ -76,7 +77,7 @@ function sameApproved(scope:InvoiceScope,terms:Terms){
  if(!item||item.revision!==terms.revision||item.name!==terms.itemName||(item.collection?.due[terms.memberId]??item.shares[terms.memberId])!==terms.amount||
   item.status==='cancelled'||!(item.required??item.participants).every(id=>item.approvals.includes(id))||
   JSON.stringify({name:item.name,price:item.price,participants:item.participants,shares:item.shares,required:item.required??item.participants,
-   approvals:item.approvals,source:item.source,...(item.collection?{collection:item.collection}:{})})!==terms.approvedSnapshot)
+   approvals:item.approvals,source:item.source,...(item.dependencyEvidence?{depends:[...item.depends].sort(),dependencyEvidence:item.dependencyEvidence}:{}),...(item.collection?{collection:item.collection}:{})})!==terms.approvedSnapshot)
   throw new BackendError('INVOICE_APPROVAL_CHANGED','Invoice terms no longer match the approved item. Cancel this invoice and approve a new revision.',409);
  requireMerchantCheckout(item);requirePayPalCurrency(scope.record.state.plan);
  if(item.expires&&(!Number.isFinite(Date.parse(item.expires))||Date.parse(item.expires)<=Date.now()))
@@ -169,7 +170,7 @@ export class PlanInvoiceRepository {
   const terms:Terms={planId:state.plan.id!,itemId:item.id,itemName:item.name,memberId:input.memberId,revision:item.revision,
    amount,currency:'CAD',email:input.email,due:input.due,dueAt:input.dueAt,allowPartial:input.allowPartial,minimum:input.minimum,
    reference:`pr:${id}`,invoiceNumber:`PR${id.slice(0,20)}`,approvedSnapshot:JSON.stringify({name:item.name,price:item.price,
-    participants:item.participants,shares:item.shares,required:item.required??item.participants,approvals:item.approvals,source:item.source,...(item.collection?{collection:item.collection}:{})})};
+    participants:item.participants,shares:item.shares,required:item.required??item.participants,approvals:item.approvals,source:item.source,...(item.dependencyEvidence?{depends:[...item.depends].sort(),dependencyEvidence:item.dependencyEvidence}:{}),...(item.collection?{collection:item.collection}:{})})};
   const localDay=new Intl.DateTimeFormat('en-CA',{timeZone:state.plan.timezone,year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(input.dueAt));
   if(localDay!==input.due)throw new BackendError('INVOICE_DEADLINE','The reminder deadline must fall on the invoice due date in the plan time zone.');
   await this.effects.claim(scope,id,item.id,item.revision,input.memberId);
@@ -293,7 +294,7 @@ export class PlanInvoiceRepository {
 export function invoiceFinancialEffects(database:D1Database):InvoiceEffects {
  return {
   claim:async(scope,invoiceId,itemId,revision,memberId)=>{
-   await claimPaymentFunding(database,{owner:scope.record.owner,planId:scope.record.state.plan.id!,itemId,revision,memberId,channel:'invoice',referenceId:invoiceId});
+   await claimPaymentFunding(database,{owner:scope.record.owner,planId:scope.record.state.plan.id!,itemId,revision,memberId,channel:'invoice',referenceId:invoiceId,version:scope.record.version});
   },
   commit:async(scope,input)=>{
    const {row,leaseToken,expectedVersion}=input;
@@ -336,7 +337,7 @@ export function invoiceFinancialEffects(database:D1Database):InvoiceEffects {
      last_error=NULL,updated=? WHERE id=? AND owner=? AND version=? AND lease_token=?`)
      .bind(input.status==='closed'?'paid':['refunded','partially-refunded'].includes(input.status)?'needs-review':input.status,input.status,input.providerStatus,input.providerUrl,input.at,row.id,row.owner,expectedVersion,leaseToken),
     database.prepare('DELETE FROM backend_write_guards WHERE id=?').bind(guard),
-    database.prepare("UPDATE invoice_refund_requests SET status='completed' WHERE invoice_id=? AND status='awaiting-merchant' AND amount<=(SELECT COALESCE(SUM(r.amount),0) FROM invoice_refunds r WHERE r.invoice_id=invoice_refund_requests.invoice_id AND r.refund_id NOT IN (SELECT value FROM json_each(invoice_refund_requests.terms,'$.previousRefunds')))").bind(row.id),
+    ...await invoiceRefundEvidenceWrites(database,row.id,input.at),
     ...(input.collectionClosed||input.status==='closed'?[database.prepare("UPDATE invoice_collection_closures SET status='verified' WHERE invoice_id=?").bind(row.id)]:[]),
    ]);
   },
@@ -347,7 +348,7 @@ export function invoiceFinancialEffects(database:D1Database):InvoiceEffects {
 export async function reconcilePendingPlanInvoices(database:D1Database,provider:InvoiceProvider,options:{owner:string;limit?:number;invoiceId?:string}){
  const limit=Math.min(10,Math.max(1,Math.floor(options.limit??10))),results:{id:string;status:string}[]=[];
  const rows=await database.prepare(`SELECT * FROM plan_invoices WHERE owner=? AND provider_id IS NOT NULL
-  AND ${options.invoiceId?'id=?':"COALESCE(lifecycle_status,status) IN ('creating','sending','sent','partially-paid','needs-review','paid','partially-refunded','closed')"} AND lease_until<=? ORDER BY updated,id LIMIT ?`)
+  AND ${options.invoiceId?'id=?':"(COALESCE(lifecycle_status,status) IN ('creating','sending','sent','partially-paid','needs-review','paid','partially-refunded','closed') OR EXISTS(SELECT 1 FROM invoice_refund_requests q WHERE q.invoice_id=plan_invoices.id AND q.status IN ('awaiting-merchant','completed') AND q.amount>(SELECT COALESCE(SUM(a.amount),0) FROM invoice_refund_allocations a WHERE a.request_id=q.id)))"} AND lease_until<=? ORDER BY updated,id LIMIT ?`)
   .bind(options.owner,...(options.invoiceId?[options.invoiceId]:[]),Date.now(),limit).all<InvoiceRow>();
  const effects=invoiceFinancialEffects(database);
  for(const rawRow of rows.results){const row={...rawRow,status:rawRow.lifecycle_status??rawRow.status};

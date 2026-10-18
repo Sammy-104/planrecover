@@ -136,5 +136,16 @@ try{
   assert.equal(receiptExtractionSchema.safeParse({...facts,date:'2027-02-30'}).success,false);
   assert.equal(receiptExtractionSchema.safeParse({...facts,taxCents:null}).success,true);
  });
+ await check('Custom line allocations are part of the reviewed source and cannot change before group approval',async({repository,state})=>{
+  const uploaded=await upload(state,{mime:'application/pdf'}),receipt=reviewed(uploaded);
+  receipt.rows[0].allocation='weight';receipt.rows[0].values={[alice.id]:2};
+  await decoded(await routes.receipt.PATCH(request('/api/receipt','PATCH',reviewBody(uploaded,receipt))));
+  let current=await repository.loadWorkspace(owner);
+  const tampered=structuredClone(receipt);tampered.rows[0].values[alice.id]=3;
+  await decoded(await routes.workspace.POST(request('/api/workspace','POST',{version:current.version,action:{type:'receipt',receipt:tampered}})),409);
+  current=await repository.loadWorkspace(owner);
+  const saved=await decoded(await routes.workspace.POST(request('/api/workspace','POST',{version:current.version,action:{type:'receipt',receipt}})));
+  assert.equal(saved.state.receipts[0].rows[0].values[alice.id],2);assert.equal(saved.state.events.length,0);
+ });
  console.log(`${checks} durable receipt checks passed; live inference and payments disabled.`);
 }finally{rmSync(temporary,{recursive:true,force:true});delete globalThis.receiptTestEnv;}

@@ -178,9 +178,9 @@ function sourceLineDetails(item:ReceiptExtraction['items'][number],sameCurrency:
 }
 function receiptFingerprint(receipt: Receipt) {
   return JSON.stringify({merchant: receipt.merchant, date: receipt.date,
-    rows: receipt.rows.map(row => ({id: row.id, name: row.name, amount: row.amount, claims: [...row.claims].sort(),quantityMilli:row.quantityMilli,unitPrice:row.unitPrice,lineDiscount:row.lineDiscount})),
+    rows: receipt.rows.map(row => ({id: row.id, name: row.name, amount: row.amount, claims: [...row.claims].sort(),allocation:row.allocation,values:row.values,quantityMilli:row.quantityMilli,unitPrice:row.unitPrice,lineDiscount:row.lineDiscount})),
     tax: receipt.tax, tip: receipt.tip, discount: receipt.discount, total: receipt.total, payer: receipt.payer,
-    paymentConfirmed: receipt.paymentConfirmed, tipRule: receipt.tipRule, fileKey: receipt.fileKey, linkedItemId: receipt.linkedItemId});
+    paymentConfirmed: receipt.paymentConfirmed, tipRule: receipt.tipRule, fileKey: receipt.fileKey, linkedItemId: receipt.linkedItemId,recording:receipt.recording,correctionReason:receipt.correctionReason});
 }
 /** Old receipts without a persisted draft retain their existing review flow. */
 export async function requireReviewedReceiptDraft(database: D1Database, owner: string, planId: string, receipt: Receipt) {

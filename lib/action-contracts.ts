@@ -50,13 +50,16 @@ const preferences=z.object({
 }).strict();
 const receipt=z.object({
  id:z.union([id,z.literal('')]).default(''),merchant:name,date:calendarDate,
- rows:z.array(z.object({id,name,amount:money,claims:ids,quantityMilli:z.number().int().min(1).max(1e9).optional(),unitPrice:money.optional(),lineDiscount:money.optional()}).strict()).min(1).max(100)
+ rows:z.array(z.object({id,name,amount:money,claims:ids,allocation:z.enum(['equal','fixed','percent','weight']).optional(),values:weights.optional(),quantityMilli:z.number().int().min(1).max(1e9).optional(),unitPrice:money.optional(),lineDiscount:money.optional()}).strict()).min(1).max(100)
   .refine(rows=>new Set(rows.map(row=>row.id)).size===rows.length,'Receipt lines must have unique identifiers.'),
  tax:money,tip:money,discount:money,total:money,payer:id,paymentConfirmed:z.boolean(),
  tipRule:z.enum(['proportional','equal']),
  // Existing UI sends a full receipt. These values are rederived by the model.
  shares:amounts.default({}),revision:revision.default(1),approvals:optionalIds.default([]),
  status:z.enum(['review','approved']).default('review'),previousShares:amounts.optional(),
+ previousTotal:money.optional(),previousContributions:amounts.optional(),recordedEventIds:optionalIds.optional(),
+ recording:z.enum(['expense','evidence']).optional(),correctionReason:text(1000).optional(),
+ accountingItemId:id.optional(),reconciledItemId:id.nullable().optional(),
  fileKey:z.string().max(101).regex(/^[a-f0-9]{64}\/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/).optional(),
  source:text(2000).default('Manually entered receipt · review required'),linkedItemId:id.nullable().default(null),
 }).strict();
@@ -71,13 +74,15 @@ export const actionSchema=z.discriminatedUnion('type',[
  z.object({...common,type:z.literal('reset')}).strict(),
  z.object({...common,type:z.literal('plan'),plan}).strict(),
  z.object({...common,type:z.literal('add_item'),name,category:categories,start:timestamp,duration,
-  price:money.nullable(),participants:ids,location:text(300).optional(),policy:text(4000).optional(),taskOwner:id.optional()}).strict(),
+  price:money.nullable(),participants:ids,location:text(300).optional(),policy:text(4000).optional(),taskOwner:id.optional(),
+  suggestedDependencies:z.object({ids:optionalIds,source:text(600)}).strict().optional()}).strict(),
  z.object({...common,type:z.literal('preferences'),preferences}).strict(),
  z.object({...common,type:z.literal('suggestion_feedback'),suggestionId:id,
-  feedback:z.enum(['save','unsave','dismiss','vote']),vote:z.enum(['interested','not-interested']).optional()}).strict(),
+  feedback:z.enum(['save','unsave','dismiss','vote','withdraw']),vote:z.enum(['interested','not-interested','alternative-time']).optional(),alternativeStart:timestamp.optional()}).strict(),
  z.object({...common,type:z.literal('mute'),category:categories}).strict(),
  z.object({...common,type:z.literal('add_suggestion'),suggestionId:id,participants:ids,start:timestamp.optional(),duration:duration.optional()}).strict(),
  z.object({...itemAction,type:z.literal('item_location'),latitude,longitude}).strict(),
+ z.object({...itemAction,type:z.literal('item_dependencies'),revision,depends:optionalIds,source:text(600).min(1),confirm:z.literal(true)}).strict(),
  z.object({...itemAction,type:z.literal('move_item'),day:calendarDate,beforeId:id.nullable().optional(),travelMode:travelMode.optional()}).strict(),
  z.object({...common,type:z.literal('undo_move'),undoId:id}).strict(),
  z.object({...itemAction,type:z.literal('item_edit'),participants:ids,price:money.nullable(),
@@ -103,6 +108,9 @@ export const actionSchema=z.discriminatedUnion('type',[
 ]).superRefine((action,context)=>{
  if(action.type==='suggestion_feedback'&&action.feedback==='vote'&&!action.vote){
   context.addIssue({code:z.ZodIssueCode.custom,path:['vote'],message:'Choose a vote.'});
+ }
+ if(action.type==='suggestion_feedback'&&action.feedback==='vote'&&action.vote==='alternative-time'&&!action.alternativeStart){
+  context.addIssue({code:z.ZodIssueCode.custom,path:['alternativeStart'],message:'Choose an alternative date and time.'});
  }
  if(action.type==='item_edit'&&action.allocation==='fixed'&&Object.values(action.values??{}).some(value=>!Number.isSafeInteger(value))){
   context.addIssue({code:z.ZodIssueCode.custom,path:['values'],message:'Fixed shares must be integer currency units.'});
