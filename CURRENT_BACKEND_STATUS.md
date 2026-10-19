@@ -4,7 +4,13 @@ The current scope is [CURRENT_SCOPE.md](docs/CURRENT_SCOPE.md). Earlier mileston
 
 ## October 19 Bedrock follow-up
 
-The next integration adds shared per-invocation admission, metadata-only token/failure accounting and authenticated feature readback observations. It preserves per-person limits, reviewed proposals and manual receipt review. See [Bedrock operations and workflow integration](docs/BEDROCK_OPERATIONS_2026-10-19.md) for settings, evidence boundaries and proposal-validation corrections. The release report records its actual publication and live results.
+Shared per-invocation admission, metadata-only token/failure accounting and authenticated feature readback observations are implemented. They preserve per-person limits, reviewed proposals and manual receipt review. Private version 27 passed the five scoped saved-result/preview observations. See [Bedrock operations and workflow integration](docs/BEDROCK_OPERATIONS_2026-10-19.md) for their precise evidence boundaries.
+
+The next release adds a [reviewed Canadian Nova Lite pricing preset](docs/BEDROCK_PRICING_2026-10-19.md), bound to the exact configured profile with per-call price provenance. Pricing changes preserve existing feature observations. Earlier unpriced requests remain unpriced; a partial subtotal never becomes a complete billing estimate. Rates need another review by November 18, 2026.
+
+[Expanded recovery and multi-user regression](docs/RECOVERY_MULTIUSER_2026-10-19.md) exercises independent simulated identities, private conversations, affected-member approvals, viewer/revoked access and concurrent changes through real HTTP handlers and SQLite. It found and corrected invitation scope and review-write races. Simulated identities do not establish hosted second-account acceptance.
+
+Public venue details and weather now have explicit refresh, retrieval/source timestamps, expiry and bounded provider reads. Community venue facts remain separate from owner-confirmed planning evidence, live merchant prices and bookable inventory. The owner selected public venue data for this pass; no supplier booking provider is activated. The release report records final publication, live provider observations and validation.
 
 AWS now shows an applied Canada Central Nova Lite cross-region quota of 400,000 tokens/minute and 20 requests/minute. The existing Canadian application inference profile is Active. The current Free plan, $120 applicable credits and April 14, 2027 access end date were checked before testing. One synthetic AWS console request returned valid JSON using 17 input and 6 output tokens.
 

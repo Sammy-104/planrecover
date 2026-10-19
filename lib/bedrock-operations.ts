@@ -1,5 +1,6 @@
 import { bedrockConfig, BedrockError, BEDROCK_ERROR_CODES, safeBedrockDiagnostic,
   type BedrockObserver, type BedrockErrorCode } from './bedrock.ts';
+import {bedrockPricingSettings,readBedrockPricing,type BedrockPricingView} from './bedrock-pricing.ts';
 
 export const BEDROCK_FEATURES = ['chat','agent','plan-draft','receipt-image','receipt-pdf','diagnostic'] as const;
 export type BedrockFeature = typeof BEDROCK_FEATURES[number];
@@ -14,7 +15,8 @@ export type BedrockOperationsSummary = {
   scope: 'validated-provider-workflow'; window: 'last-24-hours'; since: string;
   operationLimit: 1000; truncated: boolean;
   controls: { requestsPerMinute: number; tokensPerMinute: number; dailyTokenLimit: number | null;
-    reservationIsEstimate: true; pricingConfigured: boolean; dailyWindow: 'UTC' };
+    reservationIsEstimate: true; pricingConfigured: boolean; pricing:BedrockPricingView; dailyWindow: 'UTC' };
+  pricedCostSubtotalUsd:number; unpricedUsageInvocations:number;
   features: Record<BedrockFeature, BedrockFeatureOperations>;
   recent: { feature: BedrockFeature; state: 'running'|'succeeded'|'failed'|'abandoned'; startedAt: string; completedAt: string|null;
     errorCode: BedrockErrorCode|null }[];
@@ -28,15 +30,8 @@ function integer(value: unknown, fallback: number | null, min: number, max: numb
   if (typeof value === 'string' && !/^\d+$/.test(value)) throw configFailure();
   const result = Number(value); if (!Number.isSafeInteger(result) || result < min || result > max) throw configFailure(); return result;
 }
-function price(value: unknown) {
-  if (value === undefined || value === '') return null;
-  if (typeof value !== 'string' && typeof value !== 'number') throw configFailure();
-  if (typeof value === 'string' && !/^(?:0|[1-9]\d*)(?:\.\d{1,8})?$/.test(value)) throw configFailure();
-  const result = Number(value); if (!Number.isFinite(result) || result < 0 || result > 100_000) throw configFailure(); return result;
-}
 export function bedrockSharedControls(settings: Record<string, unknown>): Controls {
-  const input = price(settings.BEDROCK_INPUT_USD_PER_MILLION_TOKENS), output = price(settings.BEDROCK_OUTPUT_USD_PER_MILLION_TOKENS);
-  if ((input === null) !== (output === null)) throw configFailure();
+  const {inputUsdPerMillionTokens:input,outputUsdPerMillionTokens:output}=bedrockPricingSettings(settings);
   return { requestsPerMinute: integer(settings.BEDROCK_SHARED_REQUESTS_PER_MINUTE,20,1,120)!,
     tokensPerMinute: integer(settings.BEDROCK_SHARED_TOKENS_PER_MINUTE,400_000,128,10_000_000)!,
     dailyTokenLimit: integer(settings.BEDROCK_DAILY_TOKEN_LIMIT,null,128,100_000_000),
@@ -45,8 +40,10 @@ export function bedrockSharedControls(settings: Record<string, unknown>): Contro
 /** Exact configuration fingerprint only; never return it through a public API. */
 export async function bedrockConfigurationHash(settings: Record<string, unknown>) {
   const configuration = bedrockConfig(settings); if (!configuration) throw configFailure();
+  // Preserve v27's unpriced connection fingerprint: pricing alone does not invalidate
+  // read-back evidence. Every invocation retains its own original pricing basis.
   const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify({ version: 1, configuration,
-    controls: bedrockSharedControls(settings) })));
+    controls: {...bedrockSharedControls(settings),inputUsdPerMillionTokens:null,outputUsdPerMillionTokens:null} })));
   return Array.from(new Uint8Array(bytes), byte => byte.toString(16).padStart(2,'0')).join('');
 }
 function code(value: unknown): BedrockErrorCode | null {
@@ -71,6 +68,7 @@ async function abandonExpired(database: Database, now: number) {
 export async function withTrackedBedrock<T>(database: Database, settings: Record<string,unknown>, context: Context,
   work: (observer: BedrockObserver & { readonly operationId: string; readonly configurationHash: string }) => Promise<T>): Promise<T> {
   validContext(context); const configurationHash = await bedrockConfigurationHash(settings), controls = bedrockSharedControls(settings);
+  const pricing=await readBedrockPricing(settings);
   const operationId = crypto.randomUUID(), started = Date.now();
   await abandonExpired(database, started);
   await databaseWork(async () => checked(await database.prepare(`INSERT INTO bedrock_operations
@@ -102,9 +100,10 @@ export async function withTrackedBedrock<T>(database: Database, settings: Record
     async recordUsage(id, usage) {
       if (!invocations.has(id) || ![usage.inputTokens,usage.outputTokens,usage.totalTokens].every(value => Number.isSafeInteger(value) && value>=0)
         || usage.totalTokens!==usage.inputTokens+usage.outputTokens || usage.totalTokens>1_000_000) throw accountingFailure();
-      const cost = controls.inputUsdPerMillionTokens===null ? null : (usage.inputTokens*controls.inputUsdPerMillionTokens+usage.outputTokens*controls.outputUsdPerMillionTokens!)/1_000_000;
-      const row = await databaseWork(() => database.prepare(`UPDATE bedrock_invocations SET input_tokens=?,output_tokens=?,total_tokens=?,estimated_cost_usd=?
-        WHERE id=? AND operation_id=? AND total_tokens IS NULL RETURNING id`).bind(usage.inputTokens,usage.outputTokens,usage.totalTokens,cost,id,operationId).first<{id:string}>());
+      const basis=pricing.status==='configured'&&!usage.unpricedTokenTypes?pricing.basis:null;
+      const cost=basis?(usage.inputTokens*basis.inputUsdPerMillionTokens+usage.outputTokens*basis.outputUsdPerMillionTokens)/1_000_000:null;
+      const row = await databaseWork(() => database.prepare(`UPDATE bedrock_invocations SET input_tokens=?,output_tokens=?,total_tokens=?,estimated_cost_usd=?,pricing_basis=?
+        WHERE id=? AND operation_id=? AND total_tokens IS NULL RETURNING id`).bind(usage.inputTokens,usage.outputTokens,usage.totalTokens,cost,basis?JSON.stringify(basis):null,id,operationId).first<{id:string}>());
       if (!row) throw accountingFailure();
     },
     async afterInvocation(id, result) {
@@ -134,28 +133,32 @@ export async function readBedrockOperationsSummary(database: Database, settings:
   now = Date.now()): Promise<BedrockOperationsSummary> {
   validContext({owner,memberId:owner,planId,feature:'diagnostic'});
   const configurationHash = await bedrockConfigurationHash(settings), controls = bedrockSharedControls(settings), since = now-86_400_000;
+  const pricing=await readBedrockPricing(settings,now);
   await abandonExpired(database,now);
   const rows = await databaseWork(() => database.prepare(`SELECT o.feature,o.state,o.started_at,o.completed_at,o.error_code,
     (SELECT COALESCE(sum(i.total_tokens),0) FROM bedrock_invocations i WHERE i.operation_id=o.id) AS tokens,
     (SELECT count(*) FROM bedrock_invocations i WHERE i.operation_id=o.id AND i.total_tokens IS NULL) AS unknown_usage,
-    (SELECT sum(i.estimated_cost_usd) FROM bedrock_invocations i WHERE i.operation_id=o.id) AS cost
+    (SELECT count(*) FROM bedrock_invocations i WHERE i.operation_id=o.id AND i.total_tokens IS NOT NULL AND (i.estimated_cost_usd IS NULL OR i.pricing_basis IS NULL)) AS unpriced_usage,
+    (SELECT sum(CASE WHEN i.pricing_basis IS NOT NULL THEN i.estimated_cost_usd END) FROM bedrock_invocations i WHERE i.operation_id=o.id) AS cost
     FROM bedrock_operations o WHERE owner=? AND (? IS NULL OR plan_id=?) AND configuration_hash=? AND started_at>=?
     ORDER BY started_at DESC LIMIT 1001`).bind(owner,planId??null,planId??null,configurationHash,since).all<{
       feature:BedrockFeature;state:'running'|'succeeded'|'failed'|'abandoned';started_at:number;completed_at:number|null;
-      error_code:string|null;tokens:number;unknown_usage:number;cost:number|null}>());
+      error_code:string|null;tokens:number;unknown_usage:number;unpriced_usage:number;cost:number|null}>());
   if (!rows.success) throw accountingFailure();
   const features = Object.fromEntries(BEDROCK_FEATURES.map(feature => [feature,{attempted:0,succeeded:0,failed:0,running:0,abandoned:0,
-    lastSucceededAt:null,lastAttemptAt:null,knownTokens:0,unknownUsageInvocations:0,estimatedCostUsd:controls.inputUsdPerMillionTokens===null?null:0,lastErrorCode:null}])) as Record<BedrockFeature,BedrockFeatureOperations>;
+    lastSucceededAt:null,lastAttemptAt:null,knownTokens:0,unknownUsageInvocations:0,estimatedCostUsd:pricing.status==='configured'?0:null,lastErrorCode:null}])) as Record<BedrockFeature,BedrockFeatureOperations>;
+  let pricedCostSubtotalUsd=0,unpricedUsageInvocations=0;
   for (const row of rows.results.slice(0,1000)) {
     if (!BEDROCK_FEATURES.includes(row.feature)) continue; const feature = features[row.feature];
     feature.attempted++; feature[row.state]++; feature.lastAttemptAt??=new Date(row.started_at).toISOString();
     if (row.state==='succeeded') feature.lastSucceededAt??=new Date(row.completed_at??row.started_at).toISOString();
     feature.lastErrorCode??=code(row.error_code); feature.knownTokens+=row.tokens; feature.unknownUsageInvocations+=row.unknown_usage;
-    if (feature.estimatedCostUsd!==null) feature.estimatedCostUsd = row.unknown_usage ? null : feature.estimatedCostUsd+(row.cost??0);
+    pricedCostSubtotalUsd+=row.cost??0;unpricedUsageInvocations+=row.unpriced_usage;
+    if (feature.estimatedCostUsd!==null) feature.estimatedCostUsd = row.unknown_usage||row.unpriced_usage ? null : feature.estimatedCostUsd+(row.cost??0);
   }
   return {scope:'validated-provider-workflow',window:'last-24-hours',since:new Date(since).toISOString(),operationLimit:1000,truncated:rows.results.length>1000,
     controls:{requestsPerMinute:controls.requestsPerMinute,tokensPerMinute:controls.tokensPerMinute,dailyTokenLimit:controls.dailyTokenLimit,
-      reservationIsEstimate:true,pricingConfigured:controls.inputUsdPerMillionTokens!==null,dailyWindow:'UTC'},features,
+      reservationIsEstimate:true,pricingConfigured:pricing.status==='configured',pricing,dailyWindow:'UTC'},features,pricedCostSubtotalUsd,unpricedUsageInvocations,
     recent:rows.results.slice(0,20).map(row=>({feature:row.feature,state:row.state,startedAt:new Date(row.started_at).toISOString(),
       completedAt:row.completed_at===null?null:new Date(row.completed_at).toISOString(),errorCode:code(row.error_code)}))};
 }

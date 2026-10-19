@@ -19,10 +19,12 @@ Stored metadata includes feature, owner/member/plan scope, configuration fingerp
 | `BEDROCK_SHARED_REQUESTS_PER_MINUTE` | `20` | Rolling shared provider request admission |
 | `BEDROCK_SHARED_TOKENS_PER_MINUTE` | `400000` | Rolling estimated-token admission |
 | `BEDROCK_DAILY_TOKEN_LIMIT` | Unset | Optional shared token allowance, resetting at midnight UTC |
-| `BEDROCK_INPUT_USD_PER_MILLION_TOKENS` | Unset | Explicit verified input-token price for this exact model/profile |
-| `BEDROCK_OUTPUT_USD_PER_MILLION_TOKENS` | Unset | Explicit verified output-token price; configure with input price |
+| `BEDROCK_PRICING_PRESET` | Unset | Reviewed model/source-region/tier/currency/rate bundle |
+| `BEDROCK_PRICING_MODEL_SHA256` | Unset | Private exact runtime model/profile and source-region binding |
+| `BEDROCK_INPUT_USD_PER_MILLION_TOKENS` | Unset | Legacy explicit input price; alone does not qualify for an estimate |
+| `BEDROCK_OUTPUT_USD_PER_MILLION_TOKENS` | Unset | Legacy explicit output price, paired with input; must match the reviewed preset if supplied |
 
-No price is guessed. Without both explicit prices, estimated cost is unavailable. Missing counts also prevent a complete cost estimate. Estimates cover recorded model tokens only, not other AWS charges. Runtime settings are not changed by adding support for these settings.
+No price is guessed. The follow-up [pricing configuration](BEDROCK_PRICING_2026-10-19.md) verifies the actual Canadian Nova Lite rates and binds a reviewed preset to the exact runtime profile. Missing counts, missing prices or unsupported token types prevent a complete cost estimate. Earlier unpriced calls remain unpriced; a separate subtotal covers calls with a recorded verified basis. Estimates cover recorded model tokens only, not credits, taxes or other AWS charges. Runtime settings are not changed merely by adding support for them.
 
 ## Owner status and evidence
 
@@ -36,7 +38,7 @@ The panel separately records five server-observed scopes:
 - Saved image extraction read back after its durable receipt revision was written.
 - Saved PDF extraction read back after its durable receipt revision was written.
 
-Evidence must match a succeeded operation, successful invocation, current configuration, matching actor/plan and current non-legacy membership. Proof references are hashed and duplicate observations do not inflate counts. No client endpoint can mark a feature passed. Changes to the connection/settings require new scoped observations. A validated response alone cannot create saved-result evidence, and these limited observations do not certify accuracy, review, approval, later application or production readiness.
+Evidence must match a succeeded operation, successful invocation, current configuration, matching actor/plan and current non-legacy membership. Proof references are hashed and duplicate observations do not inflate counts. No client endpoint can mark a feature passed. Changes to the inference connection or shared controls require new scoped observations; pricing-only changes preserve saved-result evidence and do not revalue historical calls. A validated response alone cannot create saved-result evidence, and these limited observations do not certify accuracy, review, approval, later application or production readiness.
 
 ## Proposal integration corrections
 

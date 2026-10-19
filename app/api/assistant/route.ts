@@ -13,6 +13,9 @@ import {BackendError,conflict,missingPlan} from '@/lib/backend-errors';
 import {loadPlanningPreferences} from '@/lib/planning-constraints';
 import {isDemoTrip} from '@/lib/model';
 import {savedToolResults} from '@/lib/agent-checkpoints';
+// Invitation context stays read-only even when the signed-in person also has
+// editing membership outside that link. Recheck it at each agent tool boundary.
+const readOnlyAgentTools=new Set(['compare_recovery_options','get_change_status']);
 export async function POST(request:Request){let conversationLease:{id:string;token:string}|undefined;const conversations=new ConversationRepository(db());try{
  checkOrigin(request);const access=await workspaceAccess(request);
  if(!access.user)throw new BackendError('AUTH_REQUIRED','Sign in to chat about your saved plans.',401);
@@ -47,7 +50,15 @@ export async function POST(request:Request){let conversationLease:{id:string;tok
     release=await acquireAiLease(db(),identity.id,'plan-draft');
     await withTrackedBedrock(db(),env as unknown as Record<string,unknown>,{owner:record?.owner??access.id,memberId:identity.id,planId:input.planId,feature:input.agent?'agent':'chat'},async observer=>{
      bedrockOperationId=observer.operationId;
-     if(input.agent&&!input.demoMember){const result=await converseAgent(provider,{system:agentInstructions,prompt:JSON.stringify(context),tools:record?agentToolDefinitions:agentToolDefinitions.filter(t=>t.name==='prepare_plan'),execute:(name,args)=>executeAgentTool({database:db(),repository,owner:proposalOwner,identity,boundPlanId:input.planId,turn:input.conversationId?{conversationId:input.conversationId,requestId:input.requestId!,conversationOwner}:undefined},name,args)},{observer});reply=result.text;prepared=result.results;}
+     if(input.agent&&!input.demoMember){const result=await converseAgent(provider,{system:agentInstructions,prompt:JSON.stringify(context),tools:record?agentToolDefinitions.filter(tool=>access.share?.role!=='viewer'||readOnlyAgentTools.has(tool.name)):agentToolDefinitions.filter(t=>t.name==='prepare_plan'),execute:async(name,args)=>{
+      let invitation;
+      if(access.share){const currentAccess=await workspaceAccess(request);
+       if(!currentAccess.share||currentAccess.id!==access.id||currentAccess.share.tokenHash!==access.share.tokenHash||currentAccess.share.tripId!==input.planId)throw missingPlan();
+       if(currentAccess.share.role==='viewer'&&!readOnlyAgentTools.has(name))throw new BackendError('FORBIDDEN','This invitation has viewing access only.',403);
+       invitation={...currentAccess.share,owner:currentAccess.id};
+      }
+      return executeAgentTool({database:db(),repository,owner:proposalOwner,identity,boundPlanId:input.planId,invitation,turn:input.conversationId?{conversationId:input.conversationId,requestId:input.requestId!,conversationOwner}:undefined},name,args);
+     }},{observer});reply=result.text;prepared=result.results;}
      else{const result=await converseJson(provider,{system:assistantSystem,prompt:JSON.stringify(context),validate:value=>assistantAnswer.parse(value)},{observer});reply=result.value.answer;followUps=result.value.followUps;}
     });mode='bedrock';
    }catch{if(input.conversationId)prepared=await savedToolResults(db(),conversationOwner,identity.id,input.conversationId,input.requestId);notice=prepared.length?'Your prepared reviews were saved. Open them below; the assistant could not finish its reply.':'AI could not answer just now. Here is the answer from your saved plan.';}finally{if(release)await release();}

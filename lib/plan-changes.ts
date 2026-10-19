@@ -12,6 +12,7 @@ import {hasMerchantCheckout} from './merchant-scope.ts';
 import {assertPaymentChangeReady,paymentChangeGuard} from './payment-change-fence.ts';
 import {assertDependenciesReviewed} from './dependencies.ts';
 import {purchaseEvents,accountingItemIds,hasFinalizedReceiptPurchase} from './receipt-accounting.ts';
+import {reviewWriteGuard,type ReviewInvitation} from './review-write-guard.ts';
 
 const id=z.string().min(1).max(180).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/).refine(v=>!['__proto__','prototype','constructor'].includes(v));
 const version=z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
@@ -116,14 +117,15 @@ export class PlanChangeService{
  const remaining=replacements.some(i=>i.price===null)?null:replacements.reduce((total,item)=>{const recorded=purchaseEvents(record.state,item.id).filter(e=>e.status==='confirmed'&&e.kind!=='settlement').reduce((n,e)=>n+(e.shares[identity.id]??0),0);return total+Math.max(0,(item.shares[identity.id]??0)-recorded);},0);
  const review=await reviewPlanning(this.database,record,identity.id,applied?replacements:terms.additions,{removeIds:[...terms.originals.map(i=>i.id),...replacementIds],finalChange:applied?0:impact?.finalChange,newPaymentNow:applied?remaining:impact?.newPaymentNow,financialEffectsAlreadyIncluded:applied});
  return {id:row.id,planId:row.plan_id,terms,status:row.status,created:row.created,approved:approvals.results.map(a=>a.member_id),fullyApproved:terms.required.every(id=>approvals.results.some(a=>a.member_id===id)),appliedAt:row.applied_at,progress,review,workflow:await syncChangeWorkflow(this.database,row.id)};}
- async propose(planId:string,identity:Identity,input:Extract<z.infer<typeof changeRequest>,{type:'departure'|'recovery'}>,stableId?:string){
+ async propose(planId:string,identity:Identity,input:Extract<z.infer<typeof changeRequest>,{type:'departure'|'recovery'}>,stableId?:string,invitation?:ReviewInvitation){
   if(stableId){const prior=await this.database.prepare('SELECT id FROM plan_changes WHERE id=?').bind(stableId).first();if(prior)return this.get(planId,identity,stableId);}
   const record=await this.access(planId,identity,true);if(record.version!==input.version)throw conflict();
   const policies=await this.database.prepare('SELECT body FROM booking_policies WHERE owner=? AND plan_id=? ORDER BY created').bind(record.owner,planId).all<{body:string}>();
   const byItem:Record<string,any>={};for(const p of policies.results){const policy=JSON.parse(p.body),item=record.state.items.find(i=>i.id===policy.itemId);if(item&&item.revision===policy.itemRevision&&item.source===policy.source&&item.price===policy.itemPrice&&JSON.stringify(item.shares)===JSON.stringify(policy.shares)&&JSON.stringify(item.participants)===JSON.stringify(policy.participants))byItem[item.id]=policy;}
   const terms=compilePlanChange(record.state,input,byItem),changeId=stableId??crypto.randomUUID(),now=new Date().toISOString();
-  const result=await this.database.prepare(`INSERT INTO plan_changes(id,owner,plan_id,body,status,created,created_by) SELECT ?,?,?,?,'review',?,? WHERE EXISTS(SELECT 1 FROM plans p JOIN plan_members m ON m.owner=p.owner AND m.plan_id=p.id WHERE p.owner=? AND p.id=? AND p.version=? AND p.status<>'deleted' AND m.member_id=? AND m.role IN ('owner','editor'))`)
-   .bind(changeId,record.owner,planId,JSON.stringify(terms),now,identity.id,record.owner,planId,input.version,identity.id).run();if(!result.meta.changes)throw conflict();
+  const guard=reviewWriteGuard({owner:record.owner,planId,version:input.version,memberId:identity.id,invitation});
+  const result=await this.database.prepare(`INSERT INTO plan_changes(id,owner,plan_id,body,status,created,created_by) SELECT ?,?,?,?,'review',?,? WHERE ${guard.sql}`)
+   .bind(changeId,record.owner,planId,JSON.stringify(terms),now,identity.id,...guard.values).run();if(!result.meta.changes)throw conflict();
   const saved=await this.get(planId,identity,changeId),impact=terms.figures.memberImpacts[identity.id];return {...saved,review:await reviewPlanning(this.database,record,identity.id,terms.additions,{removeIds:terms.originals.map(i=>i.id),finalChange:impact?.finalChange,newPaymentNow:impact?.newPaymentNow})};
  }
  async get(planId:string,identity:Identity,changeId:string){const record=await this.access(planId,identity);const row=await this.database.prepare('SELECT * FROM plan_changes WHERE id=? AND owner=? AND plan_id=?').bind(changeId,record.owner,planId).first<Row>();if(!row)throw new BackendError('CHANGE_UNAVAILABLE','This change is unavailable.',404);return this.view(row,identity);}
@@ -131,16 +133,20 @@ export class PlanChangeService{
   const record=await this.access(planId,identity,true),change=await this.get(planId,identity,input.changeId),terms=change.terms;
   if(change.status==='applied'&&input.type==='apply')return change;
   if(record.version!==input.version||change.status!=='review')throw conflict();
-  if(input.type==='cancel'){if(record.role!=='owner')throw forbidden();await this.database.prepare("UPDATE plan_changes SET status='cancelled' WHERE id=? AND status='review'").bind(change.id).run();return this.get(planId,identity,change.id);}
+  if(input.type==='cancel'){if(record.role!=='owner')throw forbidden();const result=await this.database.prepare(`UPDATE plan_changes SET status='cancelled' WHERE id=? AND status='review'
+   AND EXISTS(SELECT 1 FROM plans p JOIN plan_members m ON m.owner=p.owner AND m.plan_id=p.id WHERE p.owner=? AND p.id=? AND p.version=? AND p.status<>'deleted' AND m.member_id=? AND m.role='owner')`)
+   .bind(change.id,record.owner,planId,record.version,identity.id).run();if(!result.meta.changes)throw conflict();return this.get(planId,identity,change.id);}
   assertDependenciesReviewed(record.state.items,record.state.items.filter(item=>item.status!=='cancelled').map(item=>item.id));
   const current=terms.originals.map(original=>record.state.items.find(i=>i.id===original.id));
   if(current.some((item,index)=>!item||signature(item)!==signature(terms.originals[index]))||terms.required.some(id=>!record.state.people?.some(p=>p.id===id&&['owner','editor'].includes(p.role))))throw conflict();
   if(terms.kind==='departure'&&(moneyFacts(record.state,terms.originals.map(i=>i.id))!==terms.events||current.some((item,index)=>item!.status!==terms.originals[index].status)))throw conflict();
   if(input.type==='approve'){
    if(!terms.required.includes(identity.id))throw forbidden();
-   const guard=crypto.randomUUID();await this.database.batch([
-    this.database.prepare(`INSERT INTO backend_write_guards(id,valid) VALUES (?,CASE WHEN EXISTS(SELECT 1 FROM plans p JOIN plan_members m ON m.owner=p.owner AND m.plan_id=p.id WHERE p.owner=? AND p.id=? AND p.version=? AND m.member_id=? AND m.role IN ('owner','editor') AND p.status<>'deleted') THEN 1 ELSE 0 END)`).bind(guard,record.owner,planId,record.version,identity.id),
+   const guard=crypto.randomUUID();try{await this.database.batch([
+    this.database.prepare(`INSERT INTO backend_write_guards(id,valid) VALUES (?,CASE WHEN EXISTS(SELECT 1 FROM plans p JOIN plan_members m ON m.owner=p.owner AND m.plan_id=p.id WHERE p.owner=? AND p.id=? AND p.version=? AND m.member_id=? AND m.role IN ('owner','editor') AND p.status<>'deleted')
+     AND EXISTS(SELECT 1 FROM plan_changes WHERE id=? AND owner=? AND plan_id=? AND status='review') THEN 1 ELSE 0 END)`).bind(guard,record.owner,planId,record.version,identity.id,change.id,record.owner,planId),
     this.database.prepare('INSERT OR IGNORE INTO plan_change_approvals(change_id,member_id,approved_at) VALUES (?,?,?)').bind(change.id,identity.id,new Date().toISOString()),this.database.prepare('DELETE FROM backend_write_guards WHERE id=?').bind(guard)]);
+   }catch(error){if(/backend_write_guard_valid|CHECK constraint failed/i.test(String(error)))throw conflict();throw error;}
    return this.get(planId,identity,change.id);
   }
   if(record.role!=='owner'||!change.fullyApproved)throw new BackendError('CHANGE_APPROVALS','The owner may apply this only after every affected person approves.',409);

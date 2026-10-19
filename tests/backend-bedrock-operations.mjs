@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { createTestD1 } from './helpers/d1.mjs';
 import { converseJson, converseAgent, bedrockConfig, BedrockError } from '../lib/bedrock.ts';
 import { withTrackedBedrock, readBedrockOperationsSummary, bedrockSharedControls, bedrockConfigurationHash } from '../lib/bedrock-operations.ts';
+import {BEDROCK_PRICING_PRESET,bedrockPricingModelHash} from '../lib/bedrock-pricing.ts';
 
 const settings={AWS_BEARER_TOKEN_BEDROCK:'private-fixture-key',BEDROCK_REGION:'ca-central-1',BEDROCK_MODEL_ID:'fixture-model',BEDROCK_MAX_TOKENS:'128'};
 const context={owner:'owner-account',memberId:'member-id',planId:'plan-id',feature:'chat'};
@@ -131,12 +132,15 @@ await check('Exact config, owner and plan scoping keep observations private and 
  for(const [configuration,owner,plan] of [[{...settings,BEDROCK_MODEL_ID:'changed-model'},context.owner,context.planId],[settings,'other-owner',context.planId],[settings,context.owner,'other-plan']])
   assert.equal((await readBedrockOperationsSummary(db,configuration,owner,plan)).features.chat.attempted,0);
 });
-await check('Explicit prices calculate estimates only from trustworthy counts; partial counts violate SQL constraints',async db=>{
- const options={BEDROCK_INPUT_USD_PER_MILLION_TOKENS:'0.1',BEDROCK_OUTPUT_USD_PER_MILLION_TOKENS:'0.2'};
+await check('Bound reviewed prices calculate estimates only from trustworthy counts; partial counts violate SQL constraints',async db=>{
+ const originalNow=Date.now;Date.now=()=>Date.parse('2026-10-19T15:00:00Z');try{
+ const options={BEDROCK_MODEL_ID:'ca.amazon.nova-lite-v1:0',BEDROCK_PRICING_PRESET,
+  BEDROCK_PRICING_MODEL_SHA256:await bedrockPricingModelHash({...settings,BEDROCK_MODEL_ID:'ca.amazon.nova-lite-v1:0'})};
  await tracked(db,options);const summary=await readBedrockOperationsSummary(db,{...settings,...options},context.owner,context.planId);
- assert.equal(summary.controls.pricingConfigured,true);assert.equal(summary.features.chat.estimatedCostUsd,0.000004);
+ assert.equal(summary.controls.pricingConfigured,true);assert.equal(summary.features.chat.estimatedCostUsd,0.00000384);
  const id=rows(db,'bedrock_invocations')[0].id;
  assert.throws(()=>db.sqlite.prepare('UPDATE bedrock_invocations SET input_tokens=NULL WHERE id=?').run(id),/CHECK/);
+ }finally{Date.now=originalNow;}
 });
 await check('Large histories are bounded and visibly marked as truncated rather than reported as complete daily totals',async db=>{
  const hash=await bedrockConfigurationHash(settings),now=Date.now(),insert=db.sqlite.prepare(`INSERT INTO bedrock_operations

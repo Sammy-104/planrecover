@@ -1,0 +1,1 @@
+ALTER TABLE `bedrock_invocations` ADD `pricing_basis` text;

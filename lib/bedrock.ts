@@ -31,7 +31,7 @@ export type BedrockErrorCode = 'BEDROCK_CONFIG' | 'BEDROCK_INPUT' | 'BEDROCK_AUT
 export const BEDROCK_ERROR_CODES = ['BEDROCK_CONFIG','BEDROCK_INPUT','BEDROCK_AUTH','BEDROCK_MODEL',
   'BEDROCK_THROTTLED','BEDROCK_TIMEOUT','BEDROCK_UNAVAILABLE','BEDROCK_RESPONSE','BEDROCK_OUTPUT',
   'BEDROCK_BLOCKED','BEDROCK_SHARED_LIMIT','BEDROCK_DAILY_LIMIT','BEDROCK_ACCOUNTING'] as const;
-export type BedrockUsage = { inputTokens: number; outputTokens: number; totalTokens: number };
+export type BedrockUsage = { inputTokens: number; outputTokens: number; totalTokens: number; unpricedTokenTypes?:true };
 /** Metadata only: observers never receive prompts, media, model IDs or credentials. */
 export type BedrockObserver = {
   readonly operationId?: string;
@@ -231,7 +231,12 @@ function knownUsage(response: unknown, maxTokens: number): BedrockUsage | null {
   const inputTokens = ownValue(usage, 'inputTokens'), outputTokens = ownValue(usage, 'outputTokens'), totalTokens = ownValue(usage, 'totalTokens');
   if (![inputTokens, outputTokens, totalTokens].every(value => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0)
     || Number(outputTokens) > maxTokens || Number(totalTokens) > 1_000_000 || totalTokens !== Number(inputTokens) + Number(outputTokens)) return null;
-  return { inputTokens: Number(inputTokens), outputTokens: Number(outputTokens), totalTokens: Number(totalTokens) };
+  // This application requests no cache checkpoints and prices uncached tokens only.
+  // Retain trustworthy primary counts but do not invent rates for extra token types.
+  const unpricedTokenTypes=['cacheReadInputTokens','cacheWriteInputTokens'].some(key=>{
+    const value=ownValue(usage,key);return value!==undefined&&value!==0;
+  });
+  return { inputTokens: Number(inputTokens), outputTokens: Number(outputTokens), totalTokens: Number(totalTokens),...(unpricedTokenTypes?{unpricedTokenTypes:true as const}:{}) };
 }
 
 /** Conservative admission estimates, not a tokenizer or an exact spend guarantee. */

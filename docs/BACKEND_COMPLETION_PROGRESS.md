@@ -4,6 +4,8 @@ The latest batch implements work that does not require Bedrock and carries forwa
 
 October 19 integration follow-up: [shared Bedrock controls and workflow observations](BEDROCK_OPERATIONS_2026-10-19.md) add durable per-feature accounting, account-wide model-call admission and exact server-verified readback scopes. This extends the existing connection; live acceptance remains separate from fixture tests and is recorded in the publication report.
 
+October 19 pricing and acceptance follow-up: [model pricing](BEDROCK_PRICING_2026-10-19.md) now has verified regional rates, exact profile binding, immutable per-call provenance and explicit unpriced historical usage. [Broader recovery/multi-user tests](RECOVERY_MULTIUSER_2026-10-19.md) cover role boundaries, private transcripts, exact approvals and concurrent revocation/review changes using simulated gateway identities. Public venue refresh and weather freshness are implemented within the owner's selected public-data scope. Merchant inventory and hosted independent-account acceptance retain their separate evidence requirements.
+
 | Area | Implemented and fixture-testable | External completion still required |
 | --- | --- | --- |
 | Bedrock | October 19: applied quota 400,000 TPM / 20 RPM; console JSON and corrected hosted diagnostic passed (110 hosted tokens). A private chat survived reload and a CAD 0 itinerary preview passed validation. Worker redirects, bounded answer formatting and the receipt data-instance prompt are corrected. | Keep feature evidence scoped: confirm receipt images, full tool-proposal journeys and wider input/error cases individually. A connection check or one successful preview does not certify every workflow. |

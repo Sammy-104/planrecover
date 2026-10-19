@@ -746,7 +746,7 @@ export const t_bedrock_operations=sqliteTable('bedrock_operations',{
 export const t_bedrock_invocations=sqliteTable('bedrock_invocations',{
  id:text('id').primaryKey().notNull(),operation_id:text('operation_id').notNull().references(()=>t_bedrock_operations.id),state:text('state').notNull(),
  started_at:integer('started_at').notNull(),expires_at:integer('expires_at').notNull(),completed_at:integer('completed_at'),reserved_tokens:integer('reserved_tokens').notNull(),
- input_tokens:integer('input_tokens'),output_tokens:integer('output_tokens'),total_tokens:integer('total_tokens'),estimated_cost_usd:real('estimated_cost_usd'),
+ input_tokens:integer('input_tokens'),output_tokens:integer('output_tokens'),total_tokens:integer('total_tokens'),estimated_cost_usd:real('estimated_cost_usd'),pricing_basis:text('pricing_basis'),
  latency_ms:integer('latency_ms'),error_code:text('error_code'),diagnostic:text('diagnostic'),
 },table=>[
  index('bedrock_invocations_window').on(table.started_at),index('bedrock_invocations_operation').on(table.operation_id),index('bedrock_invocations_expiry').on(table.state,table.expires_at),
