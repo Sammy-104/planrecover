@@ -121,7 +121,7 @@ try{
  });
  await check('Invalid model output never becomes verified and an interrupted saved check is never automatically retried',async t=>{
   provider=async()=>Response.json({output:{message:{role:'assistant',content:[{text:'{"ok":false,"private":"private-provider-body"}'}]}},stopReason:'end_turn',usage:{inputTokens:20,outputTokens:5,totalTokens:25}});
-  const body=input(),result=await decoded(await t.post(body));assert.equal(result.check.outcome,'invalid-response');noSecrets(result);
+  const body=input(),result=await decoded(await t.post(body));assert.equal(result.check.outcome,'invalid-response');assert.equal(result.check.diagnostic.validationReason,'application-schema');assert.equal(result.check.diagnostic.stopReason,'end_turn');noSecrets(result);
   await t.database.prepare("UPDATE adapter_operations SET status='processing',response=NULL,lease_until=0 WHERE id=?").bind('readiness-bedrock-'+body.requestId).run();
   assert.equal((await decoded(await t.get())).services.bedrock.lastCheck.status,'interrupted');assert.equal((await decoded(await t.post(body))).check.status,'interrupted');assert.equal(calls,1);
  });

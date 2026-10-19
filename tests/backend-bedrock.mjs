@@ -65,7 +65,7 @@ await check('Converse sends one fixed regional HTTPS request and validates JSON 
     assert.match(payload.system[0].text, /payments, refunds/);
     assert.equal(payload.inferenceConfig.maxTokens, 2048);
     assert.equal(payload.toolConfig, undefined);
-    assert.equal(payload.inferenceConfig.temperature, undefined);
+    assert.equal(payload.inferenceConfig.temperature, 0);
     return json(responseBody());
   } });
   assert.equal(calls, 1);
@@ -214,7 +214,8 @@ await check('Malformed successful responses and broken streams retain their dist
 
 await check('Diagnostic construction drops out-of-range, unknown and extra fields', async () => {
   const error = new BedrockError('BEDROCK_UNAVAILABLE', 'Safe error.', 503, true, { stage: 'request', upstreamStatus: 600,
-    awsException: 'private-receipt-evidence', networkErrorName: 'private-receipt-evidence', networkErrorCode: 'private-receipt-evidence', raw: env.AWS_BEARER_TOKEN_BEDROCK });
+    awsException: 'private-receipt-evidence', networkErrorName: 'private-receipt-evidence', networkErrorCode: 'private-receipt-evidence',
+    validationReason: 'private-receipt-evidence', stopReason: env.AWS_BEARER_TOKEN_BEDROCK, raw: env.AWS_BEARER_TOKEN_BEDROCK });
   assert.deepEqual(error.diagnostic, { stage: 'request', upstreamStatus: null, awsException: null, networkErrorName: null, networkErrorCode: null });
   assert.ok(!JSON.stringify(error).includes(env.AWS_BEARER_TOKEN_BEDROCK));
   assert.equal(new BedrockError('BEDROCK_UNAVAILABLE', 'Safe error.', 503, true, { stage: 'private-receipt-evidence' }).diagnostic, undefined);
@@ -245,6 +246,76 @@ await check('Agent failures expose the same safe diagnostics and clear response 
     assert.deepEqual(error.diagnostic, { stage: 'request', upstreamStatus: null, awsException: null, networkErrorName: 'TypeError', networkErrorCode: 'ECONNRESET' }); return true;
   });
   assert.equal(calls, 2);
+});
+
+await check('JSON accepts only complete leading reasoning and a single whole-payload JSON or plain fence', async () => {
+  const value = JSON.stringify({ currency: 'CAD', total: 1600 });
+  const textResponse = text => fixture(responseBody({ output: { message: { role: 'assistant', content: [{ text }] } } }));
+  for (const text of [value, `  <thinking>discarded-provider-wrapper</thinking>\n${value}`,
+    `<thinking>discarded-provider-wrapper</thinking>\n<thinking>discarded-second-wrapper</thinking>\n${value}`,
+    `\`\`\`json\n${value}\n\`\`\``, `\`\`\`\r\n${value}\r\n\`\`\``,
+    `<thinking>discarded-provider-wrapper</thinking>\n\`\`\`json\n${value}\n\`\`\``]) {
+    const result = await converseJson(configuration(), request(), textResponse(text));
+    assert.deepEqual(result.value, { currency: 'CAD', total: 1600 });
+    assert.ok(!JSON.stringify(result).includes('discarded-')); assert.deepEqual(result.usage, { inputTokens: 20, outputTokens: 10, totalTokens: 30 });
+  }
+  for (const text of [`<thinking>unclosed ${value}`, `<thinking>outer<thinking>inner</thinking></thinking>${value}`,
+    `${value}<thinking>misplaced</thinking>`, `preamble<thinking>misplaced</thinking>${value}`, `</thinking>${value}`,
+    `<Thinking>wrong-case</Thinking>${value}`, `<thinking role="analysis">unsupported</thinking>${value}`, `<thinking/>${value}`,
+    `${'<thinking>too-many</thinking>'.repeat(5)}${value}`, `\`\`\`json\n${value}\n\`\`\`\ntrailing`,
+    `\`\`\`json\n${value}`, `\`\`\`javascript\n${value}\n\`\`\``,
+    `\`\`\`json\n\`\`\`json\n${value}\n\`\`\`\n\`\`\``,
+    `<thinking>discarded</thinking>\n{"currency":"CAD","total":1600,"executePayment":true}`,
+    `<thinking>discarded</thinking>\n\`\`\`json\n{"__proto__":{"polluted":true},"currency":"CAD","total":1600}\n\`\`\``]) {
+    await rejects('BEDROCK_OUTPUT', () => converseJson(configuration(), request(), textResponse(text)));
+  }
+  assert.equal(Object.prototype.polluted, undefined);
+});
+
+await check('Agent answers discard complete leading reasoning and never display malformed or misplaced blocks', async () => {
+  const input = { system: 'Prepare previews only.', prompt: 'Synthetic check.', tools: [{ name: 'preview', description: 'Read', inputSchema: { type: 'object' } }], execute: async () => { throw Error('No tool execution is allowed.'); } };
+  const run = text => converseAgent(configuration(), input, { fetch: async (_, init) => {
+    const body = JSON.parse(init.body); assert.match(body.system[0].text, /only the final answer/); assert.match(body.system[0].text, /Do not include analysis/);
+    return json(responseBody({ output: { message: { role: 'assistant', content: [{ text }] } } }));
+  } });
+  for (const text of ['Synthetic answer.', '<thinking>discarded-provider-wrapper</thinking>\n\nSynthetic answer.',
+    '<thinking>discarded-one</thinking>\n<thinking>discarded-two</thinking>\nSynthetic answer.']) {
+    const result = await run(text); assert.equal(result.text, 'Synthetic answer.'); assert.equal(result.totalTokens, 30);
+    assert.ok(!JSON.stringify(result).includes('discarded-'));
+  }
+  for (const text of ['<thinking>unclosed', '<thinking>outer<thinking>inner</thinking></thinking>Answer.',
+    'Answer.<thinking>misplaced</thinking>', '<thinking>no final answer</thinking>', '<Thinking>wrong-case</Thinking>Answer.',
+    '<thinking role="analysis">unsupported</thinking>Answer.', '<thinking/>Answer.', 'Preamble <thinking>misplaced</thinking>Answer.']) {
+    await rejects('BEDROCK_OUTPUT', () => run(text));
+  }
+});
+
+await check('Provider wrapper normalization preserves the original JSON and agent response caps', async () => {
+  const text = '<thinking>' + 'x'.repeat(48_000) + '</thinking>{"currency":"CAD","total":1600}';
+  await rejects('BEDROCK_OUTPUT', () => converseJson(configuration(), request(), fixture(responseBody({ output: { message: { role: 'assistant', content: [{ text }] } } }))));
+  const input = { system: 'Read only.', prompt: 'Synthetic check.', tools: [{ name: 'preview', description: 'Read', inputSchema: { type: 'object' } }], execute: async () => ({}) };
+  await rejects('BEDROCK_OUTPUT', () => converseAgent(configuration(), input, { fetch: async () => json(responseBody({ output: { message: { role: 'assistant', content: [{ text: '<thinking>' + 'x'.repeat(8000) + '</thinking>Answer.' }] } } })) }));
+});
+
+await check('JSON validation diagnostics identify a fixed rejection branch without retaining rejected output', async () => {
+  const output = text => ({ message: { role: 'assistant', content: [{ text }] } });
+  for (const [value, reason, stopReason] of [
+    [{}, 'envelope', undefined],
+    [responseBody({ stopReason: 'max_tokens' }), 'stop-reason', 'max_tokens'],
+    [responseBody({ stopReason: 'private-receipt-evidence' }), 'stop-reason', undefined],
+    [responseBody({ output: { message: { role: 'user', content: [{ text: 'private-receipt-evidence' }] } } }), 'message', 'end_turn'],
+    [responseBody({ output: { message: { role: 'assistant', content: [{ toolUse: { name: 'private-receipt-evidence' } }] } } }), 'content-block', 'end_turn'],
+    [responseBody({ output: output('<thinking>private-receipt-evidence') }), 'output-wrapper', 'end_turn'],
+    [responseBody({ output: output('private-receipt-evidence') }), 'json-syntax', 'end_turn'],
+    [responseBody({ output: output('["private-receipt-evidence"]') }), 'json-tree', 'end_turn'],
+    [responseBody({ output: output('{"currency":"USD","total":1600}') }), 'application-schema', 'end_turn'],
+    [responseBody({ usage: { inputTokens: 20, outputTokens: 10, totalTokens: 31 } }), 'usage', 'end_turn'],
+  ]) await assert.rejects(() => converseJson(configuration(), request(), fixture(value)), error => {
+    assert.equal(error.diagnostic.stage, 'validation'); assert.equal(error.diagnostic.upstreamStatus, 200);
+    assert.equal(error.diagnostic.validationReason, reason); assert.equal(error.diagnostic.stopReason, stopReason);
+    assert.equal(Object.hasOwn(error.diagnostic, 'stopReason'), stopReason !== undefined);
+    assert.ok(!JSON.stringify(error).includes('private-receipt-evidence')); return true;
+  });
 });
 
 await check('The overall timeout covers stalled headers, ignored abort signals and stalled response bodies', async () => {
@@ -301,7 +372,7 @@ await check('Malformed responses, HTML, incomplete model output and model tool c
 
 await check('Untrusted JSON must be an object, respect application schema and exclude prototype pollution', async () => {
   const badTexts = [
-    '```json\n{"currency":"CAD","total":1600}\n```', 'null', '[]',
+    'null', '[]',
     '{"currency":"CAD","total":-1600}', '{"currency":"USD","total":1600}',
     '{"currency":"CAD","total":1600,"executePayment":true}',
     '{"__proto__":{"polluted":true},"currency":"CAD","total":1600}',

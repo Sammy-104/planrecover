@@ -1,6 +1,6 @@
 import {z} from 'zod';
 import {BackendError,conflict,forbidden} from './backend-errors.ts';
-import {bedrockConfig,converseJson,BedrockError,BEDROCK_DIAGNOSTIC_STAGES,BEDROCK_AWS_EXCEPTIONS,BEDROCK_NETWORK_ERROR_NAMES,BEDROCK_NETWORK_ERROR_CODES,type BedrockConfig} from './bedrock.ts';
+import {bedrockConfig,converseJson,BedrockError,BEDROCK_DIAGNOSTIC_STAGES,BEDROCK_AWS_EXCEPTIONS,BEDROCK_NETWORK_ERROR_NAMES,BEDROCK_NETWORK_ERROR_CODES,BEDROCK_VALIDATION_REASONS,BEDROCK_STOP_REASONS,type BedrockConfig} from './bedrock.ts';
 import {acquireAiLease} from './ai-usage.ts';
 import {providerConfig} from './http-adapters.ts';
 import {sesEmailConfig} from './ses-email.ts';
@@ -15,7 +15,7 @@ type Verification='unverified'|'running'|'passed'|'failed'|'interrupted'|'stale'
 const provider='bedrock-readiness',kind='synthetic-json-check',prefix='readiness-bedrock-';
 const outcomes=['passed','access-denied','model-unavailable','rate-limited','timed-out','invalid-response','unavailable','interrupted','authorization-changed'] as const;
 const usageSchema=z.object({inputTokens:z.number().int().nonnegative().max(1_000_000),outputTokens:z.number().int().min(0).max(128),totalTokens:z.number().int().nonnegative().max(1_000_000)}).strict();
-const diagnosticSchema=z.object({stage:z.enum(BEDROCK_DIAGNOSTIC_STAGES),upstreamStatus:z.number().int().min(100).max(599).nullable(),awsException:z.enum(BEDROCK_AWS_EXCEPTIONS).nullable(),networkErrorName:z.enum(BEDROCK_NETWORK_ERROR_NAMES).nullable(),networkErrorCode:z.enum(BEDROCK_NETWORK_ERROR_CODES).nullable()}).strict();
+const diagnosticSchema=z.object({stage:z.enum(BEDROCK_DIAGNOSTIC_STAGES),upstreamStatus:z.number().int().min(100).max(599).nullable(),awsException:z.enum(BEDROCK_AWS_EXCEPTIONS).nullable(),networkErrorName:z.enum(BEDROCK_NETWORK_ERROR_NAMES).nullable(),networkErrorCode:z.enum(BEDROCK_NETWORK_ERROR_CODES).nullable(),validationReason:z.enum(BEDROCK_VALIDATION_REASONS).optional(),stopReason:z.enum(BEDROCK_STOP_REASONS).optional()}).strict();
 const storedResult=z.object({version:z.literal(1),outcome:z.enum(outcomes),usage:usageSchema.nullable(),diagnostic:diagnosticSchema.optional()}).strict();
 export const readinessCheckRequest=z.object({action:z.literal('check-bedrock'),requestId:z.string().uuid(),confirm:z.literal(true)}).strict();
 type CheckInput=z.infer<typeof readinessCheckRequest>;

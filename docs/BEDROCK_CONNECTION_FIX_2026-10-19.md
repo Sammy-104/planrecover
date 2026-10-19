@@ -14,7 +14,9 @@ The earlier hosted synthetic check reported unavailable without model output. Th
 
 Affected authenticated outbound adapters use `redirect: 'manual'` and retain explicit unsuccessful-status rejection. Redirects cannot silently forward credentials or become successful provider results. No IAM, key, inference-profile or account-plan change is part of this correction.
 
-Bedrock owner diagnostics now retain only a fixed failure stage, bounded HTTP status, exact allowlisted AWS exception and fixed network name/code. Raw provider messages, response bodies, URLs, keys and headers are not retained. Existing saved results remain readable and request IDs still prevent repeated inference.
+Bedrock owner diagnostics now retain only a fixed failure stage, bounded HTTP status, exact allowlisted AWS exception, fixed network name/code and fixed validation/stop categories. Raw provider messages, response bodies, URLs, keys and headers are not retained. Existing saved results remain readable and request IDs still prevent repeated inference.
+
+The corrected hosted connection reached HTTP 200 and a real saved chat response. Nova's observed leading explanatory wrapper is now removed before saving a new final answer; complete leading wrappers and a single whole-payload JSON fence can be normalized without searching arbitrary text for JSON. Malformed, nested or misplaced wrappers remain rejected. Structured calls request deterministic final JSON, and all application schema, participant, money and source checks remain authoritative. Console/connection success does not establish that every generated itinerary passes those checks.
 
 ## Verification boundary
 
