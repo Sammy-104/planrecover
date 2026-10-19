@@ -17,6 +17,10 @@ export function freshPlaceInfo(place:PlaceInfo,now=Date.now()){
   &&now-checked<PLACE_INFO_FRESHNESS_MS&&now-dataAsOf<PLACE_INFO_FRESHNESS_MS&&expiry>checked&&expiry>now;
 }
 export function websiteUrl(value:unknown){try{const url=new URL(String(value));return ['https:','http:'].includes(url.protocol)&&!url.username&&!url.password?url.href:undefined;}catch{return undefined;}}
+export function placeDetailsSourceLabel(place:PlaceInfo){
+ try{const host=new URL(place.detailsSourceUrl??'').hostname;if(['wikidata.org','www.wikidata.org'].includes(host))return 'Wikidata community source';if(['openstreetmap.org','www.openstreetmap.org'].includes(host))return 'OpenStreetMap community source';}catch{}
+ return 'Public venue source';
+}
 const text=(value:unknown,max=300)=>typeof value==='string'?value.trim().slice(0,max)||undefined:undefined;
 export function mappedPlaceInfo(tags:Record<string,string>,sourceUrl:string,now=Date.now()):PlaceInfo&{wikidataId?:string;commonsFile?:string}{
  const street=[tags['addr:housenumber'],tags['addr:street']].filter(Boolean).join(' '),address=[street,tags['addr:unit']?`Unit ${tags['addr:unit']}`:undefined,tags['addr:city']||tags['addr:suburb'],tags['addr:postcode']].filter(Boolean).join(', ');

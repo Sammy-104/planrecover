@@ -8,6 +8,7 @@ import {validPoint} from './itinerary-map.ts';
 import type {TravelLeg} from './travel-routes.ts';
 import {cashLimit,limitsNeedReview} from './privacy.ts';
 import {planCurrency} from './money.ts';
+import {freshPlaceInfo} from './place-info.ts';
 
 import {listedWindows} from './opening-hours.ts';
 export {listedWindows} from './opening-hours.ts';
@@ -37,9 +38,8 @@ export function evaluateInsertion(state:State,c:Suggestion,options:PlanningOptio
  if(previous&&begin<Date.parse(previous.start)+(previous.duration+travelIn)*60000)conflict=`Travel from ${previous.name}`;
  if(next&&finish+(travelOut+buffer)*60000>Date.parse(next.start))conflict=`Travel and buffer before ${next.name}`;
  if(conflict)issues.push(`Not enough room: ${conflict}.`);
- const windows=listedWindows(c.openingHours,day),startMinute=minutes(local.slice(11)),endMinute=startMinute+duration;
+ const windows=freshPlaceInfo(c)?listedWindows(c.openingHours,day):undefined,startMinute=minutes(local.slice(11)),endMinute=startMinute+duration;
  let hours:InsertionEvaluation['hours']=windows===undefined?'unknown':windows.some(([a,b])=>startMinute>=a&&endMinute<=b)?'fits':'closed';
- if(c.detailsCheckedAt&&Date.now()-Date.parse(c.detailsCheckedAt)>30*86400000)hours='unknown';
  if(hours==='closed')issues.push('This visit is outside the listed opening hours.');
  if(privatePref?.availableFrom&&startMinute<minutes(privatePref.availableFrom)||privatePref?.availableTo&&endMinute+buffer>minutes(privatePref.availableTo))issues.push('Outside your preferred daily availability.');
  const text=`${c.name} ${c.reason} ${(c.tags??[]).join(' ')}`.toLowerCase(),interests=(privatePref?.interests??[]).filter(interest=>text.includes(interest.toLowerCase()));
@@ -71,7 +71,7 @@ export function bestSuggestionSlot(state:State,c:Suggestion,actor:string,day:str
  const visitBuffer=Math.min(180,(pref?.travelBuffer??15)+(c.category==='Activity'?pref?.queueMinutes??0:0));
  const dayItems=state.items.filter(i=>i.status!=='cancelled'&&!i.financialOnly&&i.category!=='Preparation'&&i.participants.some(id=>ids.includes(id))&&itemDay(i,state.plan.timezone)===day).sort((a,b)=>Date.parse(a.start)-Date.parse(b.start));
  const candidates=new Set<number>([startMinute]);for(const item of dayItems){const end=Date.parse(item.start)+item.duration*60000,rough=matrix?matrixMinutes(matrix,item,c,matrix.mode):travelEstimate(item,c as unknown as Item,state.plan.scheduleTravelMode??'walk').minutes;if(rough!==null&&rough!==undefined)candidates.add(minutes(localDateTime(new Date(end).toISOString(),c.timezone??dayCity(state,day).timezone).slice(11))+rough+visitBuffer);}
- for(const [a] of listedWindows(c.openingHours,day)??[])if(a>=startMinute&&a<endMinute)candidates.add(a);
+ for(const [a] of (freshPlaceInfo(c)?listedWindows(c.openingHours,day):undefined)??[])if(a>=startMinute&&a<endMinute)candidates.add(a);
  let best:InsertionEvaluation|undefined;
  for(const minute of [...candidates].filter(m=>m>=startMinute&&m+c.duration+visitBuffer<=endMinute).sort((a,b)=>a-b)){const time=`${String(Math.floor(minute/60)).padStart(2,'0')}:${String(minute%60).padStart(2,'0')}`,start=zonedStart(`${day}T${time}`,c.timezone??dayCity(state,day).timezone),evaluation=evaluateInsertion(state,{...c,start},{actor,participants:ids,day,start,matrix,mode:matrix?.mode});if(!best||evaluation.score>best.score)best=evaluation;}
  best??=evaluateInsertion(state,c,{actor,participants:ids,day,start:zonedStart(`${day}T10:00`,c.timezone??dayCity(state,day).timezone),matrix,mode:matrix?.mode});

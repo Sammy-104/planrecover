@@ -1520,6 +1520,7 @@ html::-webkit-scrollbar,body::-webkit-scrollbar,[data-slot=sidebar-content]::-we
 .service-readiness-list>div{display:flex;justify-content:space-between;gap:.5rem 1.25rem;flex-wrap:wrap;padding:.65rem 0;border-bottom:1px solid var(--border)}
 .service-readiness-list dt{font-weight:600}.service-readiness-list dd{margin:0;color:var(--muted-foreground);overflow-wrap:anywhere}
 .service-readiness .notice{display:block;min-width:0}
+.planning-fit-review.notice{display:block;min-width:0}.planning-fit-review>strong{display:block;margin-bottom:.5rem}.planning-fit-review p{margin:.45rem 0;overflow-wrap:anywhere}
 .service-readiness .notice h4{font-size:1rem;margin:0 0 .75rem;line-height:1.5}
 .service-readiness .notice dl>div{display:grid;grid-template-columns:minmax(140px,1fr) minmax(0,2fr);gap:.4rem 1.25rem;padding:.6rem 0;border-bottom:1px solid var(--border)}
 .service-readiness .notice dt{font-weight:600}.service-readiness .notice dd{margin:0;overflow-wrap:anywhere;line-height:1.6}
