@@ -505,6 +505,7 @@ export const t_adapter_operations=sqliteTable("adapter_operations",{
  updated:text("updated").notNull(),
 },table=>[
  index("adapter_operations_scope").on(table.owner,table.plan_id,table.created),
+ uniqueIndex("controlled_reminder_email_once").on(table.owner,table.plan_id,table.member_id,sql`json_extract(${table.request}, '$.sourceJobId')`).where(sql`${table.provider}='aws-ses' AND ${table.kind}='controlled-self-test'`),
 ]);
 
 export const t_agent_proposals=sqliteTable("agent_proposals",{
@@ -596,6 +597,7 @@ export const t_receipt_objects=sqliteTable("receipt_objects",{
  lease_token:text("lease_token"),
  lease_until:integer("lease_until").notNull().default(0),
  deleted_at:text("deleted_at"),
+ source_sha256:text("source_sha256"),
 },table=>[
  index("receipt_objects_cleanup").on(table.status,table.created,table.lease_until),
 ]);
@@ -709,4 +711,61 @@ export const t_invoice_collection_closures=sqliteTable("invoice_collection_closu
  status:text("status").notNull().default(sql.raw("'awaiting-merchant'")),
  created:text("created").notNull(),
 },table=>[
+]);
+
+export const t_invoice_refund_allocations=sqliteTable('invoice_refund_allocations',{
+ request_id:text('request_id').notNull().references(()=>t_invoice_refund_requests.id),
+ refund_id:text('refund_id').notNull().references(()=>t_invoice_refunds.refund_id),
+ amount:integer('amount').notNull(),created:text('created').notNull(),
+},table=>[primaryKey({columns:[table.request_id,table.refund_id]}),index('invoice_refund_allocations_refund').on(table.refund_id),check('invoice_refund_allocation_amount_valid',sql`${table.amount}>0`)]);
+
+export const t_external_recovery_resolutions=sqliteTable('external_recovery_resolutions',{
+ id:text('id').primaryKey().notNull(),owner:text('owner').notNull(),plan_id:text('plan_id').notNull(),item_id:text('item_id').notNull(),
+ body:text('body').notNull(),status:text('status').notNull().default('review'),created:text('created').notNull(),created_by:text('created_by').notNull(),applied_at:text('applied_at'),
+},table=>[foreignKey({columns:[table.owner,table.plan_id],foreignColumns:[t_plans.owner,t_plans.id]}),index('external_recovery_resolutions_scope').on(table.owner,table.plan_id,table.created),check('external_recovery_status_valid',sql`${table.status} IN ('review','completed','cancelled')`)]);
+
+export const t_external_recovery_approvals=sqliteTable('external_recovery_approvals',{
+ resolution_id:text('resolution_id').notNull().references(()=>t_external_recovery_resolutions.id),member_id:text('member_id').notNull(),approved_at:text('approved_at').notNull(),
+},table=>[primaryKey({columns:[table.resolution_id,table.member_id]})]);
+
+export * from './notification-delivery-schema';
+export * from './ops-schema';
+export * from './frontend-schema';
+
+export const t_bedrock_operations=sqliteTable('bedrock_operations',{
+ id:text('id').primaryKey().notNull(),owner:text('owner').notNull(),member_id:text('member_id').notNull(),plan_id:text('plan_id'),
+ feature:text('feature').notNull(),configuration_hash:text('configuration_hash').notNull(),state:text('state').notNull(),
+ started_at:integer('started_at').notNull(),expires_at:integer('expires_at').notNull(),completed_at:integer('completed_at'),error_code:text('error_code'),
+},table=>[
+ index('bedrock_operations_scope').on(table.owner,table.plan_id,table.configuration_hash,table.started_at),
+ index('bedrock_operations_expiry').on(table.state,table.expires_at),
+ check('bedrock_operation_feature_valid',sql`${table.feature} IN ('chat','agent','plan-draft','receipt-image','receipt-pdf','diagnostic')`),
+ check('bedrock_operation_hash_valid',sql`length(${table.configuration_hash})=64 AND ${table.configuration_hash} NOT GLOB '*[^0-9a-f]*'`),
+ check('bedrock_operation_state_valid',sql`${table.state} IN ('running','succeeded','failed','abandoned')`),
+ check('bedrock_operation_time_valid',sql`${table.started_at}>=0 AND ${table.expires_at}>${table.started_at} AND (${table.completed_at} IS NULL OR ${table.completed_at}>=${table.started_at})`),
+]);
+export const t_bedrock_invocations=sqliteTable('bedrock_invocations',{
+ id:text('id').primaryKey().notNull(),operation_id:text('operation_id').notNull().references(()=>t_bedrock_operations.id),state:text('state').notNull(),
+ started_at:integer('started_at').notNull(),expires_at:integer('expires_at').notNull(),completed_at:integer('completed_at'),reserved_tokens:integer('reserved_tokens').notNull(),
+ input_tokens:integer('input_tokens'),output_tokens:integer('output_tokens'),total_tokens:integer('total_tokens'),estimated_cost_usd:real('estimated_cost_usd'),pricing_basis:text('pricing_basis'),
+ latency_ms:integer('latency_ms'),error_code:text('error_code'),diagnostic:text('diagnostic'),
+},table=>[
+ index('bedrock_invocations_window').on(table.started_at),index('bedrock_invocations_operation').on(table.operation_id),index('bedrock_invocations_expiry').on(table.state,table.expires_at),
+ check('bedrock_invocation_state_valid',sql`${table.state} IN ('running','succeeded','failed','abandoned')`),
+ check('bedrock_invocation_reservation_valid',sql`${table.reserved_tokens}>0`),
+ check('bedrock_invocation_time_valid',sql`${table.started_at}>=0 AND ${table.expires_at}>${table.started_at} AND (${table.completed_at} IS NULL OR ${table.completed_at}>=${table.started_at})`),
+ check('bedrock_invocation_usage_valid',sql`(${table.input_tokens} IS NULL AND ${table.output_tokens} IS NULL AND ${table.total_tokens} IS NULL AND ${table.estimated_cost_usd} IS NULL) OR (${table.input_tokens} IS NOT NULL AND ${table.output_tokens} IS NOT NULL AND ${table.total_tokens} IS NOT NULL AND ${table.input_tokens}>=0 AND ${table.output_tokens}>=0 AND ${table.total_tokens}=${table.input_tokens}+${table.output_tokens} AND ${table.total_tokens}<=1000000 AND (${table.estimated_cost_usd} IS NULL OR ${table.estimated_cost_usd}>=0))`),
+ check('bedrock_invocation_latency_valid',sql`${table.latency_ms} IS NULL OR (${table.latency_ms}>=0 AND ${table.latency_ms}<=300000)`),
+]);
+export const t_bedrock_workflow_evidence=sqliteTable('bedrock_workflow_evidence',{
+ id:text('id').primaryKey().notNull(),operation_id:text('operation_id').notNull().references(()=>t_bedrock_operations.id),owner:text('owner').notNull(),
+ member_id:text('member_id').notNull(),plan_id:text('plan_id').notNull(),feature:text('feature').notNull(),configuration_hash:text('configuration_hash').notNull(),
+ scope:text('scope').notNull(),reference_hash:text('reference_hash').notNull(),created_at:integer('created_at').notNull(),
+},table=>[
+ unique('bedrock_workflow_evidence_operation_scope').on(table.operation_id,table.scope),index('bedrock_workflow_evidence_scope').on(table.owner,table.plan_id,table.configuration_hash,table.feature,table.created_at),
+ check('bedrock_evidence_feature_valid',sql`${table.feature} IN ('chat','agent','plan-draft','receipt-image','receipt-pdf')`),
+ check('bedrock_evidence_config_hash_valid',sql`length(${table.configuration_hash})=64 AND ${table.configuration_hash} NOT GLOB '*[^0-9a-f]*'`),
+ check('bedrock_evidence_reference_hash_valid',sql`length(${table.reference_hash})=64 AND ${table.reference_hash} NOT GLOB '*[^0-9a-f]*'`),
+ check('bedrock_evidence_scope_valid',sql`${table.scope} IN ('saved-chat-readback','saved-agent-proposal-readback','draft-preview-constructed','saved-image-receipt-readback','saved-pdf-receipt-readback')`),
+ check('bedrock_evidence_time_valid',sql`${table.created_at}>=0`),
 ]);

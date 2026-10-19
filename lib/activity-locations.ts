@@ -1,3 +1,4 @@
+import {dayCity,itemDay} from './city-stays.ts';
 import {tripCatalog,type State,type Item} from './model.ts';
 import {photoTitles} from './city-lookup.ts';
 import {searchCities,validCitySelection} from './city-search.ts';
@@ -46,13 +47,13 @@ export async function existingActivityLocations(state:State,request:typeof fetch
   }
  }));
  if(!manual.length)return {resolved,unavailable};
- const selected=validCitySelection(state.plan.city,state.plan.destination),tripCity=selected??await localCity(state.plan.destination);
+ const selected=validCitySelection(state.plan.city,state.plan.destination);
  const lookups=new Map<string,Promise<PlaceLocation&PlacePhoto|undefined>>();
  // Limit parallel requests while allowing each stop to use its own city.
  let next=0;
  await Promise.all(Array.from({length:Math.min(3,manual.length)},async()=>{
   while(next<manual.length){
-   const item=manual[next++],locationCity=tripCity&&fold(item.location.split(',')[0])===fold(tripCity.name)?tripCity:await localCity(item.location),city=locationCity||tripCity;if(!city)continue;
+   const item=manual[next++],context=dayCity(state,itemDay(item,state.plan.timezone),state.plan.stays?.some(s=>s.id===item.stayId)?item.stayId:undefined),tripCity=context.city??selected??await localCity(context.destination),locationCity=tripCity&&fold(item.location.split(',')[0])===fold(tripCity.name)?tripCity:await localCity(item.location),city=locationCity||tripCity;if(!city)continue;
    const query=namedPlace(item.name,city.name)??(!locationCity?namedPlace(item.location,city.name):undefined);if(!query)continue;
    const key=`${query}|${city.latitude}|${city.longitude}`;
    if(!lookups.has(key))lookups.set(key,(async()=>{

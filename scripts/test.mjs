@@ -16,13 +16,8 @@ if (args[0] === '--suite') {
     'tests/action-contracts.mjs', 'tests/payment-boundaries.mjs',
     ...readdirSync(resolve(root, 'tests')).filter(name => /^backend-.*\.mjs$/.test(name)).sort().map(name => `tests/${name}`),
   ];
-  const existingSuites = [
-    'invariants', 'blueprint-alignment', 'people', 'plan-types', 'trip-deletion',
-    'trip-sharing', 'worldwide-planning', 'itinerary-map', 'planner-improvements',
-    'schedule-search', 'city-discovery', 'city-coverage', 'discovery-popularity',
-    'niche-discovery', 'place-details', 'place-search', 'worldwide-discovery',
-  ].map(name => `tests/${name}.mjs`);
-  const selected = args.includes('--backend') ? backendSuites : [...backendSuites, ...existingSuites];
+  const allSuites = readdirSync(resolve(root, 'tests')).filter(name => name.endsWith('.mjs')).sort().map(name => `tests/${name}`);
+  const selected = args.includes('--backend') ? backendSuites : allSuites;
   const extraFiles = args.filter(arg => !arg.startsWith('--')).map(name => name.includes('/') || name.includes('\\') ? name : `tests/${name.replace(/\.mjs$/, '')}.mjs`);
   const suites = extraFiles.length ? extraFiles : selected;
   if (!suites.length) throw new Error('No backend test suites were found.');

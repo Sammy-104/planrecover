@@ -127,6 +127,62 @@
       "when": 1792108615394,
       "tag": "0017_connected_workflows",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "6",
+      "when": 1792195200000,
+      "tag": "0018_financial_review_fences",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "6",
+      "when": 1792375268277,
+      "tag": "0019_notification_delivery",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "6",
+      "when": 1792375302686,
+      "tag": "0020_ops_health",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "6",
+      "when": 1792375308666,
+      "tag": "0021_frontend_workspace",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "6",
+      "when": 1792375782967,
+      "tag": "0022_receipt_source_hash",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "6",
+      "when": 1792411200000,
+      "tag": "0023_bedrock_operations",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "6",
+      "when": 1792422318486,
+      "tag": "0024_bedrock_pricing",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "6",
+      "when": 1792425520894,
+      "tag": "0025_controlled_reminder_email",
+      "breakpoints": true
     }
   ]
 }

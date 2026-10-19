@@ -1,6 +1,9 @@
 # Bedrock and backend verification
 
-The broader backend feature set is now implemented. See [CURRENT_BACKEND_STATUS.md](CURRENT_BACKEND_STATUS.md) and [BACKEND_FEATURE_GUIDE.md](BACKEND_FEATURE_GUIDE.md) for the complete current flows and 38-suite regression result. Canada Central and application-profile mode remain configured; live AWS still needs a key and actual application-profile ARN.
+**Current readiness:** see [CURRENT_BACKEND_STATUS.md](CURRENT_BACKEND_STATUS.md). This guide preserves test procedures; older counts/setup assumptions below are historical. Bedrock secret names/profile mode are configured in the supplied deployment records, but successful hosted inference remains unverified. The MCP surface now has ten validated review-oriented tools.
+
+
+The broader backend feature set is now implemented. See [CURRENT_BACKEND_STATUS.md](CURRENT_BACKEND_STATUS.md) and [BACKEND_FEATURE_GUIDE.md](BACKEND_FEATURE_GUIDE.md) for the complete current flows and 38-suite regression result. Canada Central, application-profile mode and secret names are configured; live AWS still needs account/quota resolution and successful invocation evidence.
 
 The connected PlanRecover Sandbox MCP was verified on October 14, 2026 through its actual authenticated tools. `list_plans`, `get_plan`, `get_my_money` and `get_decisions` all succeeded on the existing **MCP connection verification** plan. Reading the plan again left its version at zero. This verifies the hosted MCP/OAuth connection; a physical Alexa+ device/service is a separate integration.
 
@@ -25,7 +28,7 @@ Content-Type: application/json
 
 Replace zero with the returned current version. The response contains `provider`, `modelId`, token usage and `draft` with warnings, unknown prices, equal-share previews and ordinary editable actions. Review any chosen action and submit it individually to `PATCH /api/plans/{planId}` with the current version. Re-read the plan after each edit. Free items create no financial events; priced items remain subject to normal review/approval rules. AI estimates supply no merchant checkout or refund authority.
 
-Without configured AWS settings the draft endpoint returns HTTP 503 / `BEDROCK_NOT_CONFIGURED`. This is the expected deployment state until account access is configured. A changed plan/private budget returns 409; missing membership returns 404; viewing-only members get 403; a concurrent call or hourly limit returns 429. Provider errors are sanitized, and potentially billed requests are never automatically retried.
+Without configured AWS settings the draft endpoint returns HTTP 503 / `BEDROCK_NOT_CONFIGURED`. This is the behavior for an unconfigured environment. The existing private deployment has settings present; inspect its actual sanitized provider error and account/quota evidence rather than assuming a missing key. A changed plan/private budget returns 409; missing membership returns 404; viewing-only members get 403; a concurrent call or hourly limit returns 429. Provider errors are sanitized, and potentially billed requests are never automatically retried.
 
 ## Test receipt review
 

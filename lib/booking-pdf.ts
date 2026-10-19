@@ -1,0 +1,6 @@
+import type {PDFDocumentProxy} from 'pdfjs-dist';
+export async function pdfConfirmationText(bytes:Uint8Array,engine?:typeof import('pdfjs-dist')){
+ const pdf=engine??await import('pdfjs-dist');if(!engine)pdf.GlobalWorkerOptions.workerSrc='/vendor/pdfjs/pdf.worker.min.mjs';
+ const loading=pdf.getDocument({data:bytes,disableFontFace:true,useWasm:false,enableXfa:false,cMapUrl:engine?undefined:'/vendor/pdfjs/cmaps/',cMapPacked:true,standardFontDataUrl:engine?undefined:'/vendor/pdfjs/standard_fonts/'});let document:PDFDocumentProxy|undefined;
+ try{document=await loading.promise;if(document.numPages>20)throw Error('Use a confirmation with up to 20 pages, or paste the relevant text.');let text='';for(let n=1;n<=document.numPages;n++){const page=await document.getPage(n),content=await page.getTextContent();for(const item of content.items)if('str'in item)text+=item.str+(item.hasEOL?'\n':' ');text+='\n';if(text.length>40000)throw Error('This document has too much text. Paste only the relevant booking details.');page.cleanup();}if(text.trim().length<10)throw Error('This PDF has no readable text. Paste the confirmation details or enter them manually.');return text;}finally{await loading.destroy();}
+}

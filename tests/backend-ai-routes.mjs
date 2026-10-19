@@ -59,7 +59,7 @@ try{
       checks++;console.log(`PASS ${name}`);
     }finally{database.close();delete globalThis.backendTestEnv.DB;}
   }
-  await check('AI previews preserve plan and ledger, unknown costs, and require human review',async({repository,record,id,body})=>{
+  await check('AI previews preserve plan and ledger, unknown costs, and require human review',async({database,repository,record,id,body})=>{
     const response=await routes.draft.POST(request(id,body),context(id));
     assert.match(response.headers.get('cache-control'),/private, no-store/);
     const data=await decoded(response);
@@ -69,6 +69,9 @@ try{
     assert.ok(data.draft.warnings.some(w=>w.includes('unknown')));
     assert.deepEqual((await repository.getPlan(id,identity)).state,record.state);
     assert.equal(calls,1);
+    assert.equal(database.sqlite.prepare("SELECT count(*) n FROM bedrock_operations WHERE plan_id=? AND feature='plan-draft' AND state='succeeded'").get(id).n,1);
+    assert.equal(database.sqlite.prepare('SELECT total_tokens FROM bedrock_invocations').get().total_tokens,120);
+    assert.equal(database.sqlite.prepare("SELECT count(*) n FROM bedrock_workflow_evidence WHERE plan_id=? AND scope='draft-preview-constructed'").get(id).n,1);
   });
   await check('Authentication, origin and membership fail before inference',async({id,body})=>{
     await decoded(await routes.draft.POST(request(id,body,{account:null}),context(id)),401);
@@ -153,10 +156,14 @@ try{
     const next=await acquireAiLease(database,memberId,'plan-draft',window+3600000);await next();
     assert.equal(database.sqlite.prepare('SELECT request_count FROM ai_usage_limits WHERE member_id=? AND feature=?').get(memberId,'plan-draft').request_count,1);
   });
-  await check('Provider failures are sanitized and never retried',async({id,body})=>{
+  await check('Provider failures are sanitized and never retried',async({database,id,body})=>{
     providerReply=()=>new Response('secret-provider-debug',{status:403});
     const error=await decoded(await routes.draft.POST(request(id,body),context(id)),503);
     assert.equal(error.code,'BEDROCK_AUTH');assert.ok(!JSON.stringify(error).includes('secret-provider'));assert.equal(calls,1);
+    const recorded=database.sqlite.prepare('SELECT state,error_code,total_tokens,diagnostic FROM bedrock_invocations').get();
+    assert.equal(recorded.state,'failed');assert.equal(recorded.error_code,'BEDROCK_AUTH');assert.equal(recorded.total_tokens,null);
+    assert.ok(!JSON.stringify(recorded).includes('secret-provider'));
+    assert.equal(database.sqlite.prepare('SELECT count(*) n FROM bedrock_workflow_evidence').get().n,0);
   });
   await check('Reviewed free draft can use existing authenticated plan edit without financial events',async({repository,id,body})=>{
     const data=facts();data.items[0].price=0;data.items[0].category='Free stop';providerReply=()=>reply(data);

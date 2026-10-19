@@ -1,0 +1,5 @@
+import {frontendJson} from '@/lib/frontend-request';
+import {workspaceAccess,loadAccess,requireEdit,checkOrigin,apiError} from '@/lib/store';
+import {checkedJourney} from '@/lib/whole-trip-server';
+import type {JourneyInput} from '@/lib/whole-trip';
+export async function POST(request:Request){try{checkOrigin(request);const access=await workspaceAccess(request),state=await loadAccess(access),body=await frontendJson(request) as {tripId:string;input:JourneyInput};requireEdit(access,state);if(body.tripId!==state.plan.id)throw Error('The active plan changed. Refresh and try again.');const result=await checkedJourney(state,access.user?.id??'sam',body.input,new URL(request.url).origin);if('draft'in result&&result.draft){const {entries,...draft}=result.draft;return Response.json({...result,draft:{...draft,entries:entries.map(({check,...entry})=>entry)}},{headers:{'Cache-Control':'private, no-store'}});}return Response.json(result,{headers:{'Cache-Control':'private, no-store'}});}catch(e){return apiError(e);}}

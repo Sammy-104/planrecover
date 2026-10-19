@@ -7,6 +7,8 @@ import { PlanRepository } from '@/lib/plan-repository';
 import { BackendError, conflict } from '@/lib/backend-errors';
 import { requireReviewedReceiptDraft } from '@/lib/receipt-drafts';
 import {reviewPlanAction} from '@/lib/planning-review';
+import {prepareFrontendAction} from '@/lib/frontend-server';
+import {invoiceJson} from '@/lib/plan-invoices';
 
 export async function GET(request:Request) {
   try {
@@ -22,10 +24,11 @@ export async function POST(request:Request) {
     checkOrigin(request);
     const access=await workspaceAccess(request), current=await loadAccess(access);
     requireEdit(access,current);
-    const parsed=parseWorkspaceMutation(await request.json(),{requireActor:!current.people});
-    const action:Action={...parsed.action,actor:current.people?access.user!.id:parsed.action.actor!};
+    const parsed=parseWorkspaceMutation(await invoiceJson(request,1000000),{requireActor:!current.people});
+    let action:Action={...parsed.action,actor:current.people?access.user!.id:parsed.action.actor!};
     if(parsed.version!==current.version)throw conflict();
     if(access.share)checkSharedAction(current,action);
+    action=await prepareFrontendAction(current,action.actor,action,new URL(request.url).origin);
     if(action.type==='receipt'&&(action.receipt as Receipt).fileKey) {
       const fileKey=(action.receipt as Receipt).fileKey!;
       const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(access.id));
@@ -35,10 +38,11 @@ export async function POST(request:Request) {
     }
     const review=current.people?await reviewPlanAction(db(),await new PlanRepository(db()).getPlan(current.plan.id!,access.user!),access.user!.id,action):null;
     let state;
-    if(action.type==='preferences'&&current.people) {
+    if(['preferences','planning_style','reminder_settings','reminder_personal'].includes(action.type)&&current.people) {
       const repository=new PlanRepository(db());
       const previous=await repository.getPreferences(current.plan.id!,access.user!);
-      await repository.updatePreferences(current.plan.id!,access.user!,action.preferences as Preferences,previous.version,{workspaceVersion:parsed.version,link:access.share});
+      const preferences=action.type==='preferences'?action.preferences as Preferences:applyAction(current,action).preferences[access.user!.id];
+      await repository.updatePreferences(current.plan.id!,access.user!,preferences,previous.version,{workspaceVersion:parsed.version,link:access.share});
       state=await loadAccess(access);
     } else {
       const next=applyAction(current,action);

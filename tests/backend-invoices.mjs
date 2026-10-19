@@ -210,6 +210,27 @@ try{
   const state=(await t.scope(t.buyer)).record.state;assert.equal(personalMoney(state,t.buyer.id).cost,7000);assert.equal(state.events.filter(e=>e.kind==='refund').length,1);assert.equal(t.database.sqlite.prepare('SELECT paid FROM plan_invoices').get().paid,10000);assert.equal(t.database.sqlite.prepare('SELECT status FROM invoice_refund_requests').get().status,'completed');
   provider.refunds.transactions[0].amount.value='40.00';await assert.rejects(t.action(invoice,'reconcile'),e=>e.code==='INVOICE_EVIDENCE');assert.equal((await t.scope(t.buyer)).record.state.events.filter(e=>e.kind==='refund').length,1);
  });
+ await check('Concurrent approved invoice refund intents consume distinct evidence and reserve only their unrefunded remainder',async t=>{
+  let invoice=await t.invoices.create(await t.scope(t.identity),await t.input());t.pay([10000],'PAID');invoice=await t.action(invoice,'reconcile');
+  const service=new InvoiceRefundService(t.database),inputs=[];
+  for(let index=0;index<2;index++){
+   const input={action:'prepare',invoiceId:invoice.id,requestId:crypto.randomUUID(),amount:1000,reason:`Reviewed refund ${index+1}`,version:(await t.scope(t.identity)).record.version};inputs.push(input);
+   const request=await service.act(t.id,t.identity,input);for(const member of [t.identity,t.buyer])await service.act(t.id,member,{action:'approve',id:request.id,confirm:true});await service.act(t.id,t.identity,{action:'handoff',id:request.id,confirm:true});
+  }
+  // Simulate pre-migration request progress that claimed completion without a
+  // finite allocation. Projection and handoff must not trust that old status.
+  t.database.sqlite.exec("UPDATE invoice_refund_requests SET status='completed'");
+  assert.ok((await service.list(t.id,t.identity)).every(request=>request.status==='awaiting-merchant'));
+  assert.equal((await service.act(t.id,t.identity,{action:'handoff',id:inputs[0].requestId,confirm:true})).status,'awaiting-merchant');
+  const provider=t.providerInvoices.get('INV2-TEST-0001');provider.status='PARTIALLY_REFUNDED';provider.due_amount.value='0.00';provider.refunds={refund_amount:{currency_code:'CAD',value:'10.00'},transactions:[{type:'PAYPAL',refund_id:'UNIQUE-REFUND-1',amount:{currency_code:'CAD',value:'10.00'}}]};
+  invoice=await t.action(invoice,'reconcile');invoice=await t.action(invoice,'reconcile');assert.equal(t.database.sqlite.prepare("SELECT COUNT(*) n FROM invoice_refund_requests WHERE status='completed'").get().n,1);
+  provider.refunds.transactions.push({type:'PAYPAL',refund_id:'UNIQUE-REFUND-2',amount:{currency_code:'CAD',value:'5.00'}});provider.refunds.refund_amount.value='15.00';invoice=await t.action(invoice,'reconcile');
+  await service.act(t.id,t.identity,{action:'prepare',invoiceId:invoice.id,requestId:crypto.randomUUID(),amount:8000,reason:'Reserve the remaining refundable balance',version:(await t.scope(t.identity)).record.version});
+  assert.equal(t.database.sqlite.prepare('SELECT SUM(amount) n FROM invoice_refund_allocations').get().n,1500);
+  assert.equal((await service.act(t.id,t.identity,{...inputs[0],version:(await t.scope(t.identity)).record.version})).id,inputs[0].requestId);
+  provider.refunds.transactions.push({type:'PAYPAL',refund_id:'UNIQUE-REFUND-3',amount:{currency_code:'CAD',value:'5.00'}});provider.refunds.refund_amount.value='20.00';invoice=await t.action(invoice,'reconcile');invoice=await t.action(invoice,'reconcile');
+  assert.equal(t.database.sqlite.prepare("SELECT COUNT(*) n FROM invoice_refund_requests WHERE status='completed'").get().n,2);assert.equal(t.database.sqlite.prepare('SELECT SUM(amount) n FROM invoice_refund_allocations').get().n,2000);assert.equal((await t.scope(t.buyer)).record.state.events.filter(e=>e.kind==='refund').length,3);
+ });
  await check('A partial invoice closes only after approved merchant revision; departure retains deposit and bills only the unpaid balance',async t=>{
   const root=await t.plans.loadWorkspace('invoice-owner'),item=root.items[0];item.price=20000;item.participants=[t.identity.id,t.buyer.id];item.shares={[t.identity.id]:10000,[t.buyer.id]:10000};item.required=[t.identity.id,t.buyer.id];item.approvals=[t.identity.id,t.buyer.id];item.revision++;await t.plans.saveWorkspace('invoice-owner',root,root.version);
   let invoice=await t.invoices.create(await t.scope(t.identity),{...await t.input(),revision:2});invoice=await t.action(invoice,'approve',t.buyer);invoice=await t.action(invoice,'send');t.pay([2500],'PARTIALLY_PAID');invoice=await t.action(invoice,'reconcile');
@@ -220,6 +241,18 @@ try{
   invoice=await t.action(invoice,'reconcile');assert.equal(invoice.status,'partially-paid');assert.equal(t.database.sqlite.prepare('SELECT status FROM invoice_collection_closures').get().status,'awaiting-merchant');
   const provider=t.providerInvoices.get('INV2-TEST-0001');provider.items[0].unit_amount.value='25.00';provider.amount.value='25.00';provider.due_amount.value='0.00';provider.status='PAID';provider.configuration.partial_payment={allow_partial_payment:false};invoice=await t.action(invoice,'reconcile');assert.equal(invoice.status,'closed');assert.equal(invoice.outstanding,0);
   await service.act(t.id,t.identity,{type:'apply',changeId:change.id,version:(await t.scope(t.identity)).record.version,confirm:true});const after=(await t.scope(t.identity)).record.state;assert.equal(after.items[0].collection.due[t.identity.id],17500);assert.equal(after.events.filter(e=>e.kind==='expense').length,1);assert.equal(after.events[0].contributions[t.buyer.id],2500);assert.equal(personalMoney(after,t.identity.id).projected,20000);
+ });
+ await check('Invoice recovery cannot close from aggregate refunds allocated to a different legacy intent',async t=>{
+  let invoice=await t.invoices.create(await t.scope(t.identity),await t.input());t.pay([10000],'PAID');invoice=await t.action(invoice,'reconcile');
+  const disabled=async()=>{throw Error('Invoice refunds never use a capture refund API');},service=new RecoveryService({database:t.database,fetchOrder:disabled,fetchCapture:disabled,fetchRefund:disabled,createRefund:disabled,commitRefund:input=>commitFinancialEffect(t.database,{owner:input.owner,planId:input.planId,event:input.event,statements:input.statements}),cancelBooking:input=>cancelRecoveredBooking(t.database,input)}),scope={owner:'invoice-owner',planId:t.id,memberId:t.identity.id};
+  const policy=await service.registerPolicy(scope,{type:'register-policy',version:(await t.scope(t.identity)).record.version,itemId:'rental',revision:1,policy:{merchant:'fictional-sandbox',merchantName:'Fictional merchant',confirmedTerms:true,terms:'80 percent refundable',evidence:'Checked fictional terms',sourceUrl:'https://merchant.example.com/terms',refundableBps:8000,cancellationFeeUnits:0,cutoff:null}});
+  let recovery=await service.propose(scope,{type:'propose',version:(await t.scope(t.identity)).record.version,policyId:policy.id,reason:'Approved cancellation'});recovery=await service.approve({...scope,memberId:t.buyer.id},{type:'approve',proposalId:recovery.id,version:recovery.version,planVersion:(await t.scope(t.buyer)).record.version});
+  const execute=()=>service.execute(scope,{type:'execute',proposalId:recovery.id,version:recovery.version,planVersion:t.database.sqlite.prepare('SELECT version FROM plans WHERE owner=? AND id=?').get('invoice-owner',t.id).version,confirmSandboxRefunds:true});assert.ok((await execute()).invoiceRefundRequired);
+  // A legacy progress claim predating this recovery shares its refund baseline.
+  await t.database.prepare("INSERT INTO invoice_refund_requests(id,owner,plan_id,invoice_id,member_id,amount,currency,terms,status,created,approved_owner,approved_member) VALUES (?,'invoice-owner',?,?,?,1000,'CAD',?,'completed','2000-01-01T00:00:00Z',1,1)").bind(crypto.randomUUID(),t.id,invoice.id,t.buyer.id,JSON.stringify({previousRefunds:[]})).run();
+  const provider=t.providerInvoices.get('INV2-TEST-0001');provider.status='PARTIALLY_REFUNDED';provider.due_amount.value='0.00';provider.refunds={refund_amount:{currency_code:'CAD',value:'80.00'},transactions:[{type:'PAYPAL',refund_id:'LEGACY-SHARED-REFUND',amount:{currency_code:'CAD',value:'80.00'}}]};invoice=await t.action(invoice,'reconcile');
+  assert.equal(t.database.sqlite.prepare('SELECT SUM(amount) n FROM invoice_refunds').get().n,8000);assert.equal(t.database.sqlite.prepare('SELECT SUM(amount) n FROM invoice_refund_allocations WHERE request_id=?').get(recovery.snapshot.invoiceRefunds[0].id).n,7000);
+  assert.ok((await execute()).invoiceRefundRequired);await finalizeConfirmedRecoveries(t.database,{owner:'invoice-owner'});assert.notEqual((await t.scope(t.identity)).record.state.items[0].status,'cancelled');
  });
  await check('Invoice-funded recovery pauses at merchant refund, survives background checks, then completes from verified invoice refunds',async t=>{
   let invoice=await t.invoices.create(await t.scope(t.identity),await t.input());invoice=await t.action(invoice,'approve',t.buyer);invoice=await t.action(invoice,'send');t.pay([10000],'PAID');invoice=await t.action(invoice,'reconcile');

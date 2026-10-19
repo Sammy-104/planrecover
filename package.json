@@ -3,15 +3,15 @@
   "version": "0.1.0",
   "private": true,
   "engines": {
-    "node": ">=22.13.0"
+    "node": ">=24.0.0"
   },
   "scripts": {
     "test": "node scripts/test.mjs",
     "typecheck": "tsc --noEmit --incremental false",
     "db:migrate:local": "node scripts/migrate-local.mjs",
-    "install:ci": "bash scripts/install-pnpm.sh",
-    "dev": "node scripts/run-framework.mjs dev",
-    "build": "node scripts/run-framework.mjs build",
+    "install:ci": "node scripts/install-dependencies.mjs",
+    "dev": "node scripts/prepare-booking-pdf.mjs && node scripts/run-framework.mjs dev",
+    "build": "node scripts/prepare-booking-pdf.mjs && node scripts/run-framework.mjs build",
     "start": "node scripts/start-local.mjs",
     "test:mcp:local": "node scripts/smoke-mcp.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
@@ -19,6 +19,7 @@
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",
+    "@block65/webcrypto-web-push": "2.0.0",
     "@hookform/resolvers": "^5.7.1",
     "@photostructure/tz-lookup": "11.7.0",
     "@shadcn/react": "^0.3.0",
@@ -33,6 +34,7 @@
     "lucide-react": "^1.31.0",
     "next": "16.3.4",
     "next-themes": "^0.4.6",
+    "pdfjs-dist": "6.4.299",
     "radix-ui": "^1.6.7",
     "react": "19.2.6",
     "react-day-picker": "^10.0.1",

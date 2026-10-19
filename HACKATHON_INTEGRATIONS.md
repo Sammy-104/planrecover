@@ -1,5 +1,7 @@
 # PlanRecover hackathon integrations
 
+**Historical integration notes.** Use [CURRENT_BACKEND_STATUS.md](CURRENT_BACKEND_STATUS.md) and [docs/CURRENT_SCOPE.md](docs/CURRENT_SCOPE.md) for current behavior. Statements below about four MCP tools, unsupported partial refunds or unlinked invoices describe earlier releases. Organizer rules/track/date statements require current official verification.
+
 **Current status:** [CURRENT_BACKEND_STATUS.md](CURRENT_BACKEND_STATUS.md) supersedes earlier unfinished-feature lists. Immutable financial history, participant checkout, generic partial recovery, invoices, automatic jobs, reminders and richer planning checks are implemented. Live AWS/Alexa+ and signed payment delivery still require account-dependent verification.
 
 Implementation notes checked against organizer and vendor documentation on October 12, 2026.

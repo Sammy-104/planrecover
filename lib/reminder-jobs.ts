@@ -4,6 +4,7 @@ import type {State} from './model.ts';
 import type {Identity} from './people.ts';
 import {z} from 'zod';
 import {providerConfig} from './http-adapters.ts';
+import {sesEmailConfig} from './ses-email.ts';
 
 type Source={kind:'task'|'item-deadline'|'reminder'|'invoice'|'quote-expiry'|'supplier-quote'|'policy-cutoff'|'unpaid-share';id:string;due:number;title:string;body:string;members:string[];invoiceVersion:number};
 type InvoiceRow={id:string;member_id:string;terms:string;version:number;status:string;amount:number;paid:number};
@@ -172,4 +173,4 @@ export class ReminderRepository{
   return {read:true};
  }
 }
-export function reminderDeliveryConfiguration(settings:Record<string,unknown>={}){let connected=false;try{connected=!!providerConfig(settings,'NOTIFICATION');}catch{}return {inApp:'configured',email:connected?'configured':'unconfigured',push:connected?'configured':'unconfigured',configurationIsNotDeliveryVerification:true};}
+export function reminderDeliveryConfiguration(settings:Record<string,unknown>={}){let connected=false,ses=false;try{connected=!!providerConfig(settings,'NOTIFICATION');}catch{}try{ses=!!sesEmailConfig(settings);}catch{}const email=settings.AWS_SES_ENABLED==='true'?ses:connected;return {inApp:'configured',email:email?'configured':'unconfigured',push:connected?'configured':'unconfigured',configurationIsNotDeliveryVerification:true};}

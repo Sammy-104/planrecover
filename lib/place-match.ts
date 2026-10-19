@@ -1,3 +1,4 @@
+import {placeQuery,matchesPlaceQuery} from './place-query.ts';
 import {activityWords,foldPlaceName,matchesDiscoverySearch,discoveryTopic} from './discovery.ts';
 export const searchAreas=[5,20,50,100] as const;
 export function searchRadius(value:unknown=20){const radius=Number(value);if(!searchAreas.includes(radius as typeof searchAreas[number]))throw Error('Choose a search area of 5, 20, 50 or 100 km.');return radius;}
@@ -10,7 +11,7 @@ export function placeMatchScore(name:string,input:string,city=''){
  for(const word of words){let best=Infinity,index=-1;for(let i=0;i<tokens.length;i++){if(used.has(i))continue;const token=tokens[i],cost=token===word?0:token.startsWith(word)?1:word.length>=4&&Math.abs(word.length-token.length)<=2&&edits(word,token)<=(word.length>=7?2:1)?4:Infinity;if(cost<best){best=cost;index=i;}}if(index<0)return undefined;used.add(index);score+=best;}
  return score;
 }
-export function rankPlaces<T extends {id:string;name:string;description:string;tags:readonly string[];latitude?:number;longitude?:number}>(places:T[],query:string,city:string,point?:{latitude?:number;longitude?:number},radius=20){
- const category=discoveryTopic(query,city),seen=new Set<string>();
- return places.map(place=>({place,score:!query.trim()?0:category?(matchesDiscoverySearch(place,query,city)?2:undefined):placeMatchScore(place.name,query,city),distance:point?placeDistance(point,place):undefined})).filter(p=>p.score!==undefined&&(p.distance===undefined||p.distance<=radius+.1)).sort((a,b)=>a.score!-b.score!||(a.distance??Infinity)-(b.distance??Infinity)||a.place.name.localeCompare(b.place.name)).filter(p=>{if(seen.has(p.place.id))return false;seen.add(p.place.id);return true;}).map(p=>p.place);
+export function rankPlaces<T extends {id:string;name:string;description?:string;reason?:string;tags?:readonly string[];latitude?:number;longitude?:number}>(places:T[],query:string,city:string,point?:{latitude?:number;longitude?:number},radius=20){
+ const intent=placeQuery(query,city),category=intent.descriptive,seen=new Set<string>();
+ return places.map(place=>({place,score:!query.trim()?0:category?(matchesPlaceQuery(place,intent,city)?2:undefined):matchesPlaceQuery(place,intent,city)?placeMatchScore(place.name,intent.subject,city):undefined,distance:point?placeDistance(point,place):undefined})).filter(p=>p.score!==undefined&&(p.distance===undefined||p.distance<=radius+.1)).sort((a,b)=>!query.trim()?0:a.score!-b.score!||(a.distance??Infinity)-(b.distance??Infinity)||a.place.name.localeCompare(b.place.name)).filter(p=>{if(seen.has(p.place.id))return false;seen.add(p.place.id);return true;}).map(p=>p.place);
 }

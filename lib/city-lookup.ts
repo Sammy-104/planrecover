@@ -1,3 +1,6 @@
+import {boundedPlaceRequest} from './public-place-request.ts';
+import {placeQuery,matchesPlaceQuery} from './place-query.ts';
+import {mappedPhotos} from './place-photos.ts';
 import {searchCities,validCitySelection,type CitySelection} from './city-search.ts';
 import {cityKey,cityProfile,type CityPlace} from './cities.ts';
 import {placeDetails,PLACE_DETAILS_VERSION} from './place-details.ts';
@@ -5,7 +8,7 @@ import {CITY_CATALOG_LIMIT,DISCOVERY_VERSION,discoveryCollection,discoveryTopic,
 import {osmPlaces,mergePlaces} from './osm-places.ts';
 import {searchMappedPlaces} from './place-search.ts';
 import {mappedPopularity} from './place-popularity.ts';
-export type CityLookup={destinationKey:string;resolvedCity:string;fetchedAt:string;source:'city-guide'|'wikipedia'|'open-places';entries:CityPlace[];radiusKm?:number;photosChecked?:boolean;detailsVersion?:number;discoveryVersion?:number;sourcesUnavailable?:boolean};
+export type CityLookup={destinationKey:string;resolvedCity:string;fetchedAt:string;source:'city-guide'|'wikipedia'|'open-places';entries:CityPlace[];radiusKm?:number;photosChecked?:boolean;detailsVersion?:number;discoveryVersion?:number;sourcesUnavailable?:boolean;searchPoint?:{latitude:number;longitude:number}};
 const userAgent='PlanRecoverBeta/1.0 (city discovery; https://planrecover-beta.goodluckimmigrations.chatgpt.site)';
 async function wiki(params:Record<string,string>,request:typeof fetch,host='en.wikipedia.org'){
  const url=new URL(`https://${host}/w/api.php`);url.search=new URLSearchParams({action:'query',format:'json',formatversion:'2',...params}).toString();
@@ -21,7 +24,7 @@ function tagsFor(text:string){return [...(/museum|gallery/i.test(text)?['Museums
 function distanceKm(a:{lat:number;lon:number},b:{lat:number;lon:number}){const rad=Math.PI/180,lat=(b.lat-a.lat)*rad,lon=(b.lon-a.lon)*rad;const h=Math.sin(lat/2)**2+Math.cos(a.lat*rad)*Math.cos(b.lat*rad)*Math.sin(lon/2)**2;return 6371*2*Math.asin(Math.min(1,Math.sqrt(h)));}
 export function cleanActivityQuery(input:string){const query=input.normalize('NFKC').trim().replace(/\s+/g,' ');if(query.length>100)throw Error('Use a shorter activity search.');return query.replace(/[^\p{L}\p{N}\s'-]/gu,' ').replace(/\s+/g,' ').trim();}
 export function activitySearchTerms(input:string,city:string){
- let query=cleanActivityQuery(input).toLowerCase();
+ let query=cleanActivityQuery(placeQuery(input,city).subject).toLowerCase();
  const cityWords=city.toLowerCase().split(/[\s,]+/).filter(Boolean);
  for(const word of cityWords)query=query.split(' ').filter(token=>token!==word).join(' ');
  query=query.replace(/\b(things to do|places to visit|near me|activities|activity|attractions|best|popular|fun|find|search|show|visit|in|near|around|the|a|an|some|for|to|me)\b/g,' ').replace(/\s+/g,' ').trim();
@@ -69,20 +72,21 @@ async function wikipediaPlaces(city:any,query:string,request:typeof fetch,radius
   return {id:`wiki-${p.pageid}`,name:p.title,category:/restaurant|food market|fish market|cafe|café|pub/i.test(text)?'Meal':/market|shopping/i.test(text)?'Practical stop':'Activity',area:`In and around ${city.title}${distance!==null?` · ${distance.toFixed(1)} km from centre`:''}`,description:p.description?`${p.description}.`:'A local place to explore. Check its source for visit details.',sourceUrl:`https://en.wikipedia.org/?curid=${Number(p.pageid)}`,sourceLabel:'Wikipedia · local place guide',tags:tagsFor(text),wikiTitle:p.title,...(point?{latitude:point.lat,longitude:point.lon}:{}),...details.get(p.title)};
  }).filter((place:CityPlace)=>(discoveryCollection(query,city.title)?place.tags.includes(discoveryCollection(query,city.title)!.label):!discoveryTopic(query,city.title)||place.tags.includes(discoveryTopic(query,city.title)!))&&(place.latitude===undefined||place.longitude===undefined||distanceKm(coordinate,{lat:place.latitude,lon:place.longitude})<=radiusKm+.1)),checked};
 }
-export async function lookupCity(destination:string,request:typeof fetch=fetch,selectedCity?:CitySelection,search='',radiusKm=20):Promise<CityLookup>{
+export async function lookupCity(destination:string,request:typeof fetch=fetch,selectedCity?:CitySelection,search='',radiusKm=20,origin?:{latitude:number;longitude:number}):Promise<CityLookup>{
+ request=boundedPlaceRequest(request,24000);
  const known=cityProfile(destination,selectedCity),query=cleanActivityQuery(search),title=destination.trim();
  if(!title||title.length>120)throw Error('Enter a city and country.');
- const result=(resolvedCity:string,source:CityLookup['source'],entries:CityPlace[],photosChecked=true,sourcesUnavailable=false):CityLookup=>({destinationKey:cityKey(destination),resolvedCity,fetchedAt:new Date().toISOString(),source,entries,radiusKm,photosChecked,detailsVersion:PLACE_DETAILS_VERSION,discoveryVersion:DISCOVERY_VERSION,sourcesUnavailable});
+ const result=(resolvedCity:string,source:CityLookup['source'],entries:CityPlace[],photosChecked=true,sourcesUnavailable=false):CityLookup=>({destinationKey:cityKey(destination),resolvedCity,fetchedAt:new Date().toISOString(),source,entries,radiusKm,photosChecked,detailsVersion:PLACE_DETAILS_VERSION,discoveryVersion:DISCOVERY_VERSION,sourcesUnavailable,searchPoint:origin});
  const guide=query?Promise.resolve({entries:[] as CityPlace[],checked:true}):guidePlaces(destination,selectedCity,request);
  const selected=validCitySelection(selectedCity,destination)??(known?(await searchCities(`${known.name}, ${known.country}`)).find(c=>c.country===known.country):undefined);
  const identify=async(name:string)=>{const b=await wiki({titles:name,redirects:'1',prop:'coordinates|pageprops|description',coprimary:'primary'},request);return b.query?.pages?.find((p:any)=>!p.missing&&p.coordinates?.length&&!('disambiguation' in (p.pageprops??{})));};
  let city:any;
  try{
-  city=selected?{title:selected.name,description:'Selected city',coordinates:[{lat:selected.latitude,lon:selected.longitude}]}:await identify(known?.name??(cityKey(title)==='algonquin area, ontario'?'Algonquin Provincial Park':title));
+  city=selected?{title:selected.name,description:'Selected city',coordinates:[{lat:origin?.latitude??selected.latitude,lon:origin?.longitude??selected.longitude}]}:await identify(known?.name??(cityKey(title)==='algonquin area, ontario'?'Algonquin Provincial Park':title));
   if(!city&&title.includes(',')){const parts=title.split(',').map(p=>p.trim()),candidate=await identify(parts[0]);if(candidate&&parts.slice(1).every(part=>cityKey(candidate.description??'').includes(cityKey(part))))city=candidate;}
  }catch(e){const fallback=await guide;if(fallback.entries.length)return result(`${known!.name}, ${known!.country}`,'city-guide',fallback.entries,fallback.checked,true);throw e;}
  if(!city||!cityDescription.test(city.description??'')){await guide;throw Error('We could not identify this city reliably. Select it from the city suggestions or include its country.');}
- const mappedSearch=query&&!discoveryTopic(query,city.title)&&selected?searchMappedPlaces(destination,selected,query,'https://planrecover-beta.goodluckimmigrations.chatgpt.site',request,{radiusKm}):Promise.resolve({places:[] as CityPlace[],unavailable:false});
+ const mappedSearch=query&&!placeQuery(query,city.title).descriptive&&selected?searchMappedPlaces(destination,selected,query,'https://planrecover-beta.goodluckimmigrations.chatgpt.site',request,{radiusKm,origin}):Promise.resolve({places:[] as CityPlace[],unavailable:false});
  const [curated,wikipedia,osm,named]=await Promise.allSettled([guide,wikipediaPlaces(city,query,request,radiusKm),osmPlaces(city.title,city.coordinates[0],query,request,radiusKm),mappedSearch]);
  const guided=curated.status==='fulfilled'?curated.value.entries:[],wikiEntries=wikipedia.status==='fulfilled'?wikipedia.value.entries:[],mapped=osm.status==='fulfilled'?osm.value:[];
  // Enrich mapped venues linked to English Wikipedia with licensed photos. Keep their original mapped coordinates.
@@ -95,7 +99,8 @@ export async function lookupCity(destination:string,request:typeof fetch=fetch,s
   }catch{mappedPhotosChecked=false;}
  }
  const searched=named.status==='fulfilled'?named.value.places:[];
- const entries=await mappedPopularity(mergePlaces([guided,searched,wikiEntries,mapped],CITY_CATALOG_LIMIT),request),unavailable=wikipedia.status==='rejected'||osm.status==='rejected';
+ const combined=mergePlaces([guided,searched,wikiEntries,mapped],CITY_CATALOG_LIMIT),pictures=await mappedPhotos(combined,request);mappedPhotosChecked=mappedPhotosChecked&&pictures.checked;
+ const entries=await mappedPopularity(pictures.places.filter(p=>!placeQuery(query,city.title).descriptive||matchesPlaceQuery(p,placeQuery(query,city.title),city.title)),request),unavailable=wikipedia.status==='rejected'||osm.status==='rejected';
  if(!entries.length&&!query)throw Error('No suitable places could be loaded. Try an activity search or add your own activity.');
  if(!entries.length&&wikipedia.status==='rejected'&&osm.status==='rejected')throw Error('City place search is temporarily unavailable. Please try again.');
  return result(city.title,mapped.length||searched.length?'open-places':wikiEntries.length?'wikipedia':'city-guide',entries,(curated.status==='fulfilled'?curated.value.checked:false)&&(wikipedia.status==='fulfilled'?wikipedia.value.checked:true)&&mappedPhotosChecked,unavailable);

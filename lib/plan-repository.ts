@@ -4,6 +4,7 @@ import { BackendError, conflict, forbidden, missingPlan } from './backend-errors
 import { sharedTripView } from './trip-sharing.ts';
 import { requireReviewedReceiptDraft } from './receipt-drafts.ts';
 import {financialSnapshotWrites} from './financial-history.ts';
+import {hasFinalizedReceiptPurchase} from './receipt-accounting.ts';
 
 type PlanStatus = 'active' | 'archived' | 'deleted';
 type PlanRow = {owner:string; id:string; body:string; version:number; status:PlanStatus; ordinal:number};
@@ -67,11 +68,27 @@ export class PlanRepository {
   private async snapshotWrites(owner:string, state:State, insertOnly:boolean, identity?:Identity) {
     const commands:D1PreparedStatement[] = [];
     const now = new Date().toISOString();
+    // Also revoke legacy deleted-plan links before a restore changes its status.
+    commands.push(this.database.prepare("DELETE FROM trip_links WHERE owner=? AND trip_id IN (SELECT id FROM plans WHERE owner=? AND status='deleted')").bind(owner,owner));
     if(!insertOnly)commands.push(this.database.prepare("UPDATE plans SET status='deleted',version=version+1,updated=? WHERE owner=? AND status<>'deleted' AND id NOT IN (SELECT value FROM json_each(?))")
       .bind(now,owner,JSON.stringify(snapshots(state).map(entry=>entry.state.plan.id))));
     for (const entry of snapshots(state)) {
       const id = entry.state.plan.id;
       if (!id) throw new BackendError('INVALID_PLAN', 'The saved plan needs an identifier.');
+      // A previously recorded standalone receipt can reconcile an estimate, but
+      // it must not race an already reserved checkout/invoice for that purchase.
+      for(const receipt of entry.state.receipts){
+        const target=receipt.status==='approved'?receipt.linkedItemId:receipt.reconciledItemId;
+        if(!target||!receipt.accountingItemId||receipt.accountingItemId===target||!hasFinalizedReceiptPurchase(entry.state,target))continue;
+        const receiptGuard=crypto.randomUUID();
+        commands.push(this.database.prepare(`INSERT INTO backend_write_guards(id,valid) VALUES (?,CASE WHEN
+          NOT EXISTS(SELECT 1 FROM payment_funding_claims WHERE owner=? AND plan_id=? AND item_id=?) OR
+          EXISTS(SELECT 1 FROM plans p,json_each(p.body,'$.receipts') r WHERE p.owner=? AND p.id=? AND json_extract(r.value,'$.id')=?
+           AND json_extract(r.value,'$.accountingItemId')=? AND (json_extract(r.value,'$.reconciledItemId')=? OR
+            json_extract(r.value,'$.status')='approved' AND json_extract(r.value,'$.linkedItemId')=?)) THEN 1 ELSE 0 END)`)
+          .bind(receiptGuard,owner,id,target,owner,id,receipt.id,receipt.accountingItemId,target,target));
+        commands.push(this.database.prepare('DELETE FROM backend_write_guards WHERE id=?').bind(receiptGuard));
+      }
       const body = JSON.stringify(planBody(entry.state));
       commands.push(this.database.prepare(insertOnly
         ? 'INSERT OR IGNORE INTO plans (owner,id,name,body,version,status,ordinal,updated) VALUES (?,?,?,?,0,?,?,?)'
@@ -94,6 +111,8 @@ export class PlanRepository {
           .bind(owner,id,person.id,JSON.stringify(entry.state.preferences[person.id] ?? defaultPreferences(entry.state.plan.budget)),now));
       }
     }
+    // Deletion and link revocation share the workspace compare-and-swap batch.
+    commands.push(this.database.prepare("DELETE FROM trip_links WHERE owner=? AND trip_id IN (SELECT id FROM plans WHERE owner=? AND status='deleted')").bind(owner,owner));
     commands.push(...await financialSnapshotWrites(this.database,owner,snapshots(state).map(entry=>entry.state)));
     return commands;
   }

@@ -1,4 +1,6 @@
 import {z} from 'zod';
+import {frontendActionSchema,frontendPlanFields} from './frontend-actions.ts';
+import {frontendPreferenceFields} from './frontend-preferences.ts';
 
 // Bounds apply before the action reaches state mutation. Membership, ownership,
 // current revisions and reconciliation remain checks against server state.
@@ -32,6 +34,7 @@ const timezone=text(100).min(1).refine(value=>{
  try{new Intl.DateTimeFormat('en',{timeZone:value});return true;}catch{return false;}
 },'Choose a valid timezone.');
 const plan=z.object({
+ ...frontendPlanFields,
  id:id.optional(),kind:kind.optional(),scheduleTravelMode:travelMode.optional(),
  name,destination:text(120).refine(value=>!!value.trim(),'Enter a destination.'),
  goal:text(2000).optional(),start:calendarDate.optional(),end:calendarDate.optional(),
@@ -44,19 +47,24 @@ const createPlan=plan.extend({start:calendarDate,end:calendarDate}).refine(value
  return days>=0&&days<=366&&(value.kind!=='day-out'||value.start===value.end);
 },'Choose plan dates within one year; a day out must use one date.');
 const preferences=z.object({
+ ...frontendPreferenceFields,
  budget:money,cash:money,reserve:money,financing:money,
  pace:z.enum(['relaxed','balanced','busy']),interests:z.array(text(80).min(1)).max(30),
  paypalMe:text(200).refine(value=>!value||/^https:\/\/(www\.)?paypal\.me\/[a-zA-Z0-9._-]+\/?$/.test(value),'Enter your approved PayPal.Me profile URL.'),
 }).strict();
 const receipt=z.object({
  id:z.union([id,z.literal('')]).default(''),merchant:name,date:calendarDate,
- rows:z.array(z.object({id,name,amount:money,claims:ids,quantityMilli:z.number().int().min(1).max(1e9).optional(),unitPrice:money.optional(),lineDiscount:money.optional()}).strict()).min(1).max(100)
+ rows:z.array(z.object({id,name,amount:money,claims:ids,allocation:z.enum(['equal','fixed','percent','weight']).optional(),values:weights.optional(),quantityMilli:z.number().int().min(1).max(1e9).optional(),unitPrice:money.optional(),lineDiscount:money.optional()}).strict()).min(1).max(100)
   .refine(rows=>new Set(rows.map(row=>row.id)).size===rows.length,'Receipt lines must have unique identifiers.'),
  tax:money,tip:money,discount:money,total:money,payer:id,paymentConfirmed:z.boolean(),
+ contributions:amounts.optional(),originalContributions:amounts.optional(),
  tipRule:z.enum(['proportional','equal']),
  // Existing UI sends a full receipt. These values are rederived by the model.
  shares:amounts.default({}),revision:revision.default(1),approvals:optionalIds.default([]),
  status:z.enum(['review','approved']).default('review'),previousShares:amounts.optional(),
+ previousTotal:money.optional(),previousContributions:amounts.optional(),recordedEventIds:optionalIds.optional(),
+ recording:z.enum(['expense','evidence']).optional(),correctionReason:text(1000).optional(),
+ accountingItemId:id.optional(),reconciledItemId:id.nullable().optional(),
  fileKey:z.string().max(101).regex(/^[a-f0-9]{64}\/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/).optional(),
  source:text(2000).default('Manually entered receipt · review required'),linkedItemId:id.nullable().default(null),
 }).strict();
@@ -69,21 +77,24 @@ export const actionSchema=z.discriminatedUnion('type',[
  z.object({...common,type:z.literal('restore_trip'),deletedTripId:id}).strict(),
  z.object({...common,type:z.literal('create_trip'),plan:createPlan}).strict(),
  z.object({...common,type:z.literal('reset')}).strict(),
- z.object({...common,type:z.literal('plan'),plan}).strict(),
+ z.object({...common,type:z.literal('plan'),plan,reviewedDates:z.boolean().optional()}).strict(),
  z.object({...common,type:z.literal('add_item'),name,category:categories,start:timestamp,duration,
-  price:money.nullable(),participants:ids,location:text(300).optional(),policy:text(4000).optional(),taskOwner:id.optional()}).strict(),
+  price:money.nullable(),participants:ids,location:text(300).optional(),policy:text(4000).optional(),taskOwner:id.optional(),
+  suggestedDependencies:z.object({ids:optionalIds,source:text(600)}).strict().optional()}).strict(),
  z.object({...common,type:z.literal('preferences'),preferences}).strict(),
  z.object({...common,type:z.literal('suggestion_feedback'),suggestionId:id,
-  feedback:z.enum(['save','unsave','dismiss','vote']),vote:z.enum(['interested','not-interested']).optional()}).strict(),
+  feedback:z.enum(['save','unsave','dismiss','vote','withdraw']),vote:z.enum(['interested','not-interested','alternative-time']).optional(),alternativeStart:timestamp.optional()}).strict(),
  z.object({...common,type:z.literal('mute'),category:categories}).strict(),
- z.object({...common,type:z.literal('add_suggestion'),suggestionId:id,participants:ids,start:timestamp.optional(),duration:duration.optional()}).strict(),
+ z.object({...common,type:z.literal('add_suggestion'),suggestionId:id,participants:ids,start:timestamp.optional(),duration:duration.optional(),buffer:z.number().int().min(0).max(240).optional(),travelMode:z.enum(['walk','drive','transit']).optional(),priceEstimate:money.nullable().optional(),extraCost:money.nullable().optional()}).strict(),
  z.object({...itemAction,type:z.literal('item_location'),latitude,longitude}).strict(),
- z.object({...itemAction,type:z.literal('move_item'),day:calendarDate,beforeId:id.nullable().optional(),travelMode:travelMode.optional()}).strict(),
+ z.object({...itemAction,type:z.literal('item_dependencies'),revision,depends:optionalIds,source:text(600).min(1),confirm:z.literal(true)}).strict(),
+ z.object({...itemAction,type:z.literal('move_item'),day:calendarDate,beforeId:id.nullable().optional(),travelMode:travelMode.optional(),fingerprint:text(600000).optional(),selectedIds:optionalIds.optional()}).strict(),
  z.object({...common,type:z.literal('undo_move'),undoId:id}).strict(),
  z.object({...itemAction,type:z.literal('item_edit'),participants:ids,price:money.nullable(),
   allocation:z.enum(['equal','fixed','percent','weight']),values:weights.optional(),name:name.optional(),
   location:text(300).optional(),start:timestamp.optional()}).strict(),
  z.object({...itemAction,type:z.literal('approve_item'),revision}).strict(),
+ z.object({...itemAction,type:z.literal('item_funding'),revision,mode:z.enum(['individual','whole-group']),payerId:id.optional(),confirm:z.literal(true)}).strict(),
  z.object({...itemAction,type:z.literal('task_edit'),name,taskOwner:id,start:timestamp}).strict(),
  z.object({...itemAction,type:z.literal('task'),done:z.boolean()}).strict(),
  z.object({...common,type:z.literal('reminder'),reminderId:id,done:z.boolean()}).strict(),
@@ -104,11 +115,19 @@ export const actionSchema=z.discriminatedUnion('type',[
  if(action.type==='suggestion_feedback'&&action.feedback==='vote'&&!action.vote){
   context.addIssue({code:z.ZodIssueCode.custom,path:['vote'],message:'Choose a vote.'});
  }
+ if(action.type==='suggestion_feedback'&&action.feedback==='vote'&&action.vote==='alternative-time'&&!action.alternativeStart){
+  context.addIssue({code:z.ZodIssueCode.custom,path:['alternativeStart'],message:'Choose an alternative date and time.'});
+ }
  if(action.type==='item_edit'&&action.allocation==='fixed'&&Object.values(action.values??{}).some(value=>!Number.isSafeInteger(value))){
   context.addIssue({code:z.ZodIssueCode.custom,path:['values'],message:'Fixed shares must be integer currency units.'});
  }
 });
-export const workspaceMutationSchema=z.object({version:count,action:actionSchema}).strict();
+// Keep the exported mutation type compact. Both discriminated contracts still
+// validate every field at runtime; expanding their Cartesian type union through
+// the frontend makes TypeScript inference unnecessarily expensive.
+type WorkspaceAction={type:string;actor?:string;tripId?:string;[key:string]:unknown};
+const workspaceActionSchema=z.union([actionSchema,frontendActionSchema]) as unknown as z.ZodType<WorkspaceAction>;
+export const workspaceMutationSchema=z.object({version:count,action:workspaceActionSchema}).strict();
 export type ValidatedAction=z.infer<typeof actionSchema>;
 export type WorkspaceMutation=z.infer<typeof workspaceMutationSchema>;
 

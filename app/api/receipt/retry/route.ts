@@ -8,6 +8,7 @@ import {invoiceJson} from '@/lib/plan-invoices';
 import {BackendError} from '@/lib/backend-errors';
 import {planCurrency} from '@/lib/money';
 import {planMembers} from '@/lib/model';
+import {confirmReceiptBedrockReadback} from '@/lib/receipt-bedrock-evidence';
 const schema=z.object({tripId:z.string().min(1).max(180),draftId:z.string().uuid(),version:z.number().int().nonnegative().safe()}).strict();
 export async function POST(request:Request){try{
  checkOrigin(request);const access=await workspaceAccess(request);if(!access.user)throw new BackendError('AUTH_REQUIRED','Sign in to retry receipt extraction.',401);
@@ -26,8 +27,9 @@ export async function POST(request:Request){try{
  const bytes=new Uint8Array(await source.arrayBuffer());if(!bytes.length||bytes.length>8*1024*1024)throw new BackendError('INVALID_RECEIPT_FILE','Use a receipt under 8 MB.');
  // Capture the current source and acquire the optimistic transition before the one provider call.
  let draft=await repository.extracting(scope,prior.id,body.version);
- const result=await extractReceipt(env as unknown as Record<string,unknown>,{mime:prior.mime,bytes},planCurrency(state.plan),{acquire:()=>acquireAiLease(db(),scope.memberId,'receipt-extraction')});
+ const result=await extractReceipt(env as unknown as Record<string,unknown>,{mime:prior.mime,bytes},planCurrency(state.plan),{acquire:()=>acquireAiLease(db(),scope.memberId,'receipt-extraction'),tracking:{database:db(),...scope}});
  draft=await repository.extracted(scope,draft.id,draft.version,result);
+ await confirmReceiptBedrockReadback(db(),env as unknown as Record<string,unknown>,scope,draft,result.bedrockOperationId);
  const payer=planMembers(state).some(person=>person.id===access.user!.id)?access.user.id:'sam';
  return Response.json({draft,receipt:draftReceipt(draft,state,payer),reviewFields:receiptReviewFields(draft,planCurrency(state.plan)),note:draft.warnings.join(' · ')},{headers:{'Cache-Control':'private, no-store'}});
 }catch(error){return apiError(error);}}

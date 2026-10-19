@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {createTestD1} from './helpers/d1.mjs';
-import {initialState} from '../lib/model.ts';
+import {initialState,applyAction} from '../lib/model.ts';
 import {PlanRepository} from '../lib/plan-repository.ts';
 import {commitFinancialEffect,claimPaymentFunding,approvedItemSnapshot,saveProviderRequestIntent} from '../lib/financial-history.ts';
 
@@ -143,4 +143,5 @@ await check('Provider intent replays retain the original immutable request and e
  await assert.rejects(saveProviderRequestIntent(database,{...input,body:{intent:'CAPTURE',amount:'91.00'}}),error=>error.code==='PAYMENT_INTENT_CHANGED');
  assert.ok(Date.parse(first.replay_before)>Date.parse(first.created));assert.equal(Date.parse(first.replay_before)-Date.parse(first.created),5*60*60_000);
 });
+await check('Concurrent whole-group funding claims reserve every participant under exactly one reference',async(database,t)=>{await database.prepare('DELETE FROM provider_operations WHERE id=?').bind(t.operationId).run();let state=await t.repository.loadWorkspace(t.owner);state=applyAction(state,{type:'item_funding',actor:'sam',itemId:'hike',revision:1,mode:'whole-group',payerId:'sam',confirm:true});for(const actor of ['sam','alex','maya','chris'])state=applyAction(state,{type:'approve_item',actor,itemId:'hike',revision:2});await t.repository.saveWorkspace(t.owner,state,state.version);const version=await database.prepare('SELECT version FROM plans WHERE owner=? AND id=?').bind(t.owner,t.planId).first('version'),base={owner:t.owner,planId:t.planId,itemId:'hike',revision:2,memberId:'sam',channel:'order',version};const results=await Promise.allSettled([claimPaymentFunding(database,{...base,referenceId:'group-order-a'}),claimPaymentFunding(database,{...base,referenceId:'group-order-b'})]);assert.equal(results.filter(result=>result.status==='fulfilled').length,1);const rows=await database.prepare('SELECT member_id,reference_id FROM payment_funding_claims WHERE owner=? AND plan_id=? AND item_id=?').bind(t.owner,t.planId,'hike').all();assert.equal(rows.results.length,4);assert.equal(new Set(rows.results.map(row=>row.reference_id)).size,1);assert.deepEqual(rows.results.map(row=>row.member_id).sort(),['alex','chris','maya','sam']);});
 console.log(`${checks} atomic financial history checks passed.`);

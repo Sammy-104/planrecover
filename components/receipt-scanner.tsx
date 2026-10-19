@@ -5,13 +5,13 @@ import {prepareReceiptImage,scanReceiptImage} from '@/lib/browser-receipt-scan';
 import type {ReceiptDraft} from '@/lib/receipt-drafts';
 type JsonFetch=(url:string,init?:RequestInit)=>Promise<any>;
 export function ReceiptScanner({planId,draft,jsonFetch,onResult,onPreview,onBusyChange,sourceHeaders,disabled=false,cloudConnected=false}:{
- planId:string;draft:ReceiptDraft|null;jsonFetch:JsonFetch;onResult:(result:any)=>void;onPreview:(url:string)=>void;onBusyChange:(busy:boolean)=>void;
+ planId:string;draft:ReceiptDraft|null;jsonFetch:JsonFetch;onResult:(result:any)=>void;onPreview:(url:string,mime:string)=>void;onBusyChange:(busy:boolean)=>void;
  sourceHeaders:HeadersInit;disabled?:boolean;cloudConnected?:boolean;
 }){
  const [busy,setBusy]=useState(false),[status,setStatus]=useState(''),[error,setError]=useState(''),[text,setText]=useState(''),[paste,setPaste]=useState(false),[rotation,setRotation]=useState(0);
  const input=useRef<HTMLInputElement>(null),life=useRef<AbortController|null>(null),preview=useRef(''),mounted=useRef(true);
  useEffect(()=>{mounted.current=true;return()=>{mounted.current=false;life.current?.abort();if(preview.current)URL.revokeObjectURL(preview.current);};},[]);
- function showPreview(blob:Blob){if(preview.current)URL.revokeObjectURL(preview.current);preview.current=URL.createObjectURL(blob);onPreview(preview.current);}
+ function showPreview(blob:Blob){if(preview.current)URL.revokeObjectURL(preview.current);preview.current=URL.createObjectURL(blob);onPreview(preview.current,blob.type);}
  function progress(message:string){if(mounted.current)setStatus(message);}
  function start(){life.current?.abort();const controller=new AbortController();life.current=controller;setBusy(true);onBusyChange(true);setError('');return controller;}
  function finish(){if(mounted.current){setBusy(false);onBusyChange(false);}}
@@ -34,11 +34,11 @@ export function ReceiptScanner({planId,draft,jsonFetch,onResult,onPreview,onBusy
    if(pdf&&file.size>8*1024*1024)throw Error('Use a PDF under 8 MB or upload a photo of the receipt.');
    const image=pdf?file:await prepareReceiptImage(file);if(controller.signal.aborted)return;
    if(!pdf)showPreview(image);
-   progress(cloudConnected?'Saving photo and checking the receipt…':'Saving your receipt photo…');
+   progress(cloudConnected?'Saving your source and checking the receipt…':'Saving your receipt source…');
    const form=new FormData();form.set('file',image,pdf?'receipt.pdf':'receipt.jpg');form.set('tripId',planId);
    const result=await jsonFetch('/api/receipt',{method:'POST',body:form,signal:controller.signal});
    if(!mounted.current)return;onResult(result);
-   if(pdf){progress('PDF saved. Upload a photo of the page for automatic scanning, or paste its receipt text below.');return;}
+   if(pdf){progress(result.draft.sourceFacts?.items?.length?`PDF read: ${result.draft.sourceFacts.items.length} ${result.draft.sourceFacts.items.length===1?'item':'items'} added. Review every amount against the source.`:result.note||'PDF saved. Review it manually or paste its receipt text below.');return;}
    if(result.draft.sourceFacts?.items?.length){progress(`${result.draft.sourceFacts.items.length} items added. Review the amounts and who had each item.`);return;}
    await recognize(image,result.draft,controller);
   }catch(error){if(!controller.signal.aborted&&mounted.current){setError((error as Error).message);setStatus('Your saved uploads remain available below.');}}

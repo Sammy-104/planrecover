@@ -18,6 +18,6 @@ export async function awsJson(env:Env,service:'states'|'geo-places'|'geo-routes'
  const keys=Object.keys(headers).sort(),canonical=keys.map(k=>`${k}:${headers[k].trim()}\n`).join(''),signed=keys.join(';'),scope=`${day}/${config.region}/${service}/aws4_request`,request=`POST\n${route.path}\n\n${canonical}\n${signed}\n${await digest(body)}`;
  const key=await hmac(await hmac(await hmac(await hmac(encoder.encode('AWS4'+config.secretAccessKey),day),config.region),service),'aws4_request'),signature=hex((await hmac(key,`AWS4-HMAC-SHA256\n${date}\n${scope}\n${await digest(request)}`)).buffer as ArrayBuffer);
  headers.Authorization=`AWS4-HMAC-SHA256 Credential=${config.accessKeyId}/${scope}, SignedHeaders=${signed}, Signature=${signature}`;
- try{return await boundedProviderJson(await (options.fetch??fetch)(`https://${route.host}${route.path}`,{method:'POST',redirect:'error',signal:AbortSignal.timeout(options.timeoutMs??12000),headers,body}),service==='textract'?2_000_000:65536);}
+ try{return await boundedProviderJson(await (options.fetch??fetch)(`https://${route.host}${route.path}`,{method:'POST',redirect:'manual',signal:AbortSignal.timeout(options.timeoutMs??12000),headers,body}),service==='textract'?2_000_000:65536);}
  catch(error){if(error instanceof BackendError)throw error;throw new BackendError('AWS_ADAPTER_UNAVAILABLE','The AWS adapter could not confirm the request. Review its saved status.',503);}
 }

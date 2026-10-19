@@ -22,12 +22,21 @@ async function check(name,run){await run();checks++;console.log('PASS '+name);}
 const aws={AWS_ADAPTERS_ENABLED:'true',AWS_ADAPTER_ACCESS_KEY_ID:'AKIDEXAMPLE',AWS_ADAPTER_SECRET_ACCESS_KEY:'fixture-secret',AWS_ADAPTER_SESSION_TOKEN:'fixture-session'};
 const bedrock={apiKey:'fixture-token',region:'ca-central-1',modelId:'ca.amazon.nova-lite-v1:0',timeoutMs:5000,maxTokens:1000};
 const usage={inputTokens:10,outputTokens:5,totalTokens:15};
+await check('AWS and generic provider redirects never become accepted responses or credential-forwarding follow-ups',async()=>{
+ for(const status of [301,302,303,307,308]){
+  let calls=0;const fetcher=async(_url,init)=>{calls++;assert.equal(init.redirect,'manual');return Response.json({accepted:true},{status,headers:{Location:'https://redirect-target.invalid/'}});};
+  await assert.rejects(awsJson(aws,'geo-places','SearchText',{QueryText:'Toronto'},{fetch:fetcher}),error=>error.code==='ADAPTER_PROVIDER');
+  assert.equal(calls,1);calls=0;
+  await assert.rejects(providerPost({origin:'https://provider.example.com',token:'fixture-token'},'/quote',{},'fixture-request',fetcher),error=>error.code==='ADAPTER_PROVIDER');
+  assert.equal(calls,1);
+ }
+});
 await check('Unconfigured adapters make no network requests; private and credential-bearing origins are rejected',async()=>{
  assert.equal(providerConfig({},'SUPPLIER'),null);for(const origin of ['http://example.com','https://127.0.0.1','https://localhost','https://private.internal','https://user:password@example.com','https://example.com/path'])assert.throws(()=>providerConfig({SUPPLIER_ORIGIN:origin,SUPPLIER_TOKEN:'key'},'SUPPLIER'));
  await assert.rejects(queryAmazonLocation({}, {operation:'search',query:'Toronto',bias:[-79,43],maxResults:5},()=>{throw Error('must not call');}),e=>e.code==='AWS_ADAPTER_UNCONFIGURED');
 });
 await check('AWS requests are signed independently correctly, pin Canadian endpoints and preserve route units',async()=>{
- let calls=0;const now=new Date('2026-10-15T12:34:56Z');await awsJson(aws,'geo-places','SearchText',{QueryText:'Toronto'},{now,fetch:async(url,init)=>{calls++;assert.equal(url,'https://places.geo.ca-central-1.amazonaws.com/v2/search-text');assert.equal(init.redirect,'error');assert.equal(init.headers['x-amz-security-token'],'fixture-session');
+ let calls=0;const now=new Date('2026-10-15T12:34:56Z');await awsJson(aws,'geo-places','SearchText',{QueryText:'Toronto'},{now,fetch:async(url,init)=>{calls++;assert.equal(url,'https://places.geo.ca-central-1.amazonaws.com/v2/search-text');assert.equal(init.redirect,'manual');assert.equal(init.headers['x-amz-security-token'],'fixture-session');
   const names=['content-type','host','x-amz-date','x-amz-security-token'],canonical=names.map(n=>`${n}:${init.headers[n]}\n`).join('');const hash=s=>createHash('sha256').update(s).digest('hex');const request=`POST\n/v2/search-text\n\n${canonical}\n${names.join(';')}\n${hash(init.body)}`;
   let key=Buffer.from('AWS4fixture-secret');for(const part of ['20261015','ca-central-1','geo-places','aws4_request'])key=createHmac('sha256',key).update(part).digest();const signature=createHmac('sha256',key).update(`AWS4-HMAC-SHA256\n20261015T123456Z\n20261015/ca-central-1/geo-places/aws4_request\n${hash(request)}`).digest('hex');assert.ok(init.headers.Authorization.endsWith(signature));return Response.json({ResultItems:[]});}});assert.equal(calls,1);
  const route=await queryAmazonLocation(aws,{operation:'route',origin:[-79,43],destination:[-79.1,43.1],travelMode:'Pedestrian'},async(url,init)=>{assert.equal(new URL(url).hostname,'routes.geo.ca-central-1.amazonaws.com');return Response.json({Routes:[{Summary:{Distance:1234,Duration:456}}]});});assert.deepEqual(route.routes,[{distanceMetres:1234,durationSeconds:456}]);assert.equal(route.bookingAuthority,false);

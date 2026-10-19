@@ -1,5 +1,7 @@
 # PlanRecover: product and build blueprint
 
+**Current specification:** [docs/CURRENT_SCOPE.md](docs/CURRENT_SCOPE.md) records the implemented architecture, boundaries and deliberate extensions. Historical proposals below are not a requirement to migrate hosting or activate every adapter.
+
 Prepared 7 October 2026 (UTC). Updated to include all additional group features and personalized suggestions. Recommendations are design proposals; API facts and hackathon dates were checked against the official sources listed below.
 
 > Plan together, pay your share, and recover together when plans change.
@@ -190,16 +192,15 @@ Application code validates totals, allocates shares, checks deadlines, evaluates
 
 Only present replacement availability and refund terms from a supported source. Store quoted price, cancellation policy, fetched time, and expiration. Users confirm inferred relationships.
 
-## 9. Suggested architecture
+## 9. Chosen architecture
 
-- Next.js, React, TypeScript, Tailwind, and shadcn/ui for the app and server routes.
-- Supabase for PostgreSQL, authentication, private receipt storage, and optional live group updates.
-- PayPal adapters behind server-side routes.
-- OpenAI Responses API with vision input and structured output.
-- Render for the hosted Node app. Add Render Workflows or a worker when resumable background actions are needed.
-- A seeded supplier adapter for the first demo.
-- Simple timeline cards initially; optional Bryntum Scheduler for richer dependency visualization.
-- Optional AG Grid Community for the editable cost ledger.
+- React, TypeScript, Tailwind and shadcn components, served by Vinext/Vite in a Cloudflare Worker.
+- D1 for durable plans, memberships, immutable financial facts and recovery workflows; private R2 for receipt sources.
+- Trusted Sites identity and the existing private publication/source workflow. GitHub is a source mirror, not an automatic deployment.
+- PayPal server adapters pinned to CAD sandbox; each member pays their own approved share.
+- Optional Canadian Bedrock application profile for validated review-only output; manual review and saved-plan fallback remain usable.
+- Database-backed durable recovery with explicit affected-member approvals. External supplier operations require a selected supported provider/bridge.
+- Existing timeline/map components. No Supabase, Render or paid scheduler migration is required by this implementation.
 
 Keep a recovery action record per step. Different providers cannot share one database transaction. If payment succeeds but booking fails, record the condition and run the explicit refund/review path. Use stable idempotency keys for retries. Reusing an idempotency key must represent the same operation and payload.
 
@@ -262,11 +263,11 @@ Avoid storing group funds in an app wallet during the first build. Prefer buyers
 
 ## 14. Hackathon dates and tool lifecycle
 
-Official submission deadline: 12 November 2026, 12:00 pm Pacific. Official judging period: 1–15 December 2026. Meaningful PayPal sandbox and AI integration are required; sponsor tools are optional.
+Historical planning record: the original draft listed November12,2026 and a December judging period. Verify current official organizer dates, track and submission requirements before relying on them; they are not revalidated by this source change.
 
 The listed Bryntum offer is a 45-day trial. Starting it now can leave a December judge without licensed access. Verify an extension or suitable redistribution license, or retain a working timeline without that dependency.
 
-Render's sponsor page advertises USD 50 credits, subject to the offer terms. Its free web services idle after 15 minutes and can take about a minute to start. Keep state in Supabase, and choose a hosting configuration that judges can reliably open.
+Current hosting is the existing private Site/Worker with D1/R2. Judge access or a reproducible local walkthrough must be deliberately prepared and verified. Historical sponsor offers do not determine the current architecture.
 
 ## 15. Official sources
 

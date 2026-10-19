@@ -1,3 +1,6 @@
+import {boundedPlaceRequest} from './public-place-request.ts';
+import {osmPlaces} from './osm-places.ts';
+import {placeQuery} from './place-query.ts';
 import {PLACE_DETAILS_VERSION,type CityPlace} from './cities.ts';
 import {searchCities,validCitySelection,type CitySelection} from './city-search.ts';
 import {cleanActivityQuery} from './city-lookup.ts';
@@ -30,24 +33,28 @@ export function photonPlaces(body:any,city:CitySelection,radius=20):CityPlace[]{
  }
  return places;
 }
-export async function searchMappedPlaces(destination:string,selected:CitySelection|undefined,input:string,origin:string,request:typeof fetch=fetch,options:{radiusKm?:number;refresh?:boolean}={}):Promise<PlaceSearch>{
+export async function searchMappedPlaces(destination:string,selected:CitySelection|undefined,input:string,origin:string,request:typeof fetch=fetch,options:{radiusKm?:number;refresh?:boolean;origin?:{latitude:number;longitude:number}}={}):Promise<PlaceSearch>{
+ request=boundedPlaceRequest(request,12000);
  const radius=searchRadius(options.radiusKm);
  const query=cleanActivityQuery(input);if(query.length<3)return {places:[],unavailable:false};
- const city=validCitySelection(selected,destination)??(await searchCities(destination)).find(c=>foldPlaceName(c.label)===foldPlaceName(destination)||foldPlaceName(c.name)===foldPlaceName(destination.split(',')[0]));
+ let city=validCitySelection(selected,destination)??(await searchCities(destination)).find(c=>foldPlaceName(c.label)===foldPlaceName(destination)||foldPlaceName(c.name)===foldPlaceName(destination.split(',')[0]));
  if(!city)return {places:[],unavailable:true};
- const cacheKey=new URL('/__public_place_search',origin);cacheKey.search=new URLSearchParams({v:'3',radius:String(radius),lat:String(city.latitude),lon:String(city.longitude),q:foldPlaceName(query)}).toString();
+ if(options.origin&&validPoint(options.origin))city={...city,...options.origin};
+ const intent=placeQuery(query,city.name),providerQuery=intent.descriptive?[intent.cuisine,intent.subject].filter(Boolean).join(' '):intent.subject;
+ const cacheKey=new URL('/__public_place_search',origin);cacheKey.search=new URLSearchParams({v:'4',radius:String(radius),lat:String(city.latitude),lon:String(city.longitude),q:foldPlaceName(query)}).toString();
  const id=cacheKey.href,remembered=recent.get(id);if(!options.refresh&&remembered&&Date.now()-remembered.at<(remembered.result.unavailable?30000:3600000))return remembered.result;
  const cache=(globalThis as typeof globalThis&{caches?:CacheStorage&{default?:Cache}}).caches?.default;
  if(cache&&!options.refresh){try{const cached=await cache.match(id);if(cached)return await cached.json() as PlaceSearch;}catch{}}
  if(!pending.has(id))pending.set(id,(async()=>{
   let result:PlaceSearch;
   try{
-   const url=new URL(provider);url.search=new URLSearchParams({q:query,lat:String(city.latitude),lon:String(city.longitude),lang:'en',limit:'50',location_bias_scale:'0.1'}).toString();
+   if(intent.descriptive){const semantic=await osmPlaces(city!.name,{lat:city!.latitude,lon:city!.longitude},query,request,radius);result={places:rankPlaces(semantic,query,city!.name,city,radius).slice(0,30),unavailable:false};}
+   else {const url=new URL(provider);url.search=new URLSearchParams({q:providerQuery,lat:String(city.latitude),lon:String(city.longitude),lang:'en',limit:'50',location_bias_scale:'0.1'}).toString();
    const latitudeDelta=(radius+.1)/111.32,longitudeDelta=(radius+.1)/(111.32*Math.max(.02,Math.cos(city.latitude*Math.PI/180))),west=city.longitude-longitudeDelta,east=city.longitude+longitudeDelta;
    if(west>=-180&&east<=180)url.searchParams.set('bbox',[west,Math.max(-90,city.latitude-latitudeDelta),east,Math.min(90,city.latitude+latitudeDelta)].join(','));
    const response=await request(url,{headers:{'User-Agent':'PlanRecoverBeta/1.0 (place search; https://planrecover-beta.goodluckimmigrations.chatgpt.site)'},signal:AbortSignal.timeout(12000)});
    if(!response.ok)throw Error('Place search unavailable.');const body=await response.json() as any;if(!Array.isArray(body?.features))throw Error('Invalid place results.');
-   result={places:rankPlaces(photonPlaces(body,city,radius),query,city.name,city,radius).slice(0,30),unavailable:false};
+   result={places:rankPlaces(photonPlaces(body,city!,radius),query,city!.name,city,radius).slice(0,30),unavailable:false};}
    if(cache){try{await cache.put(id,Response.json(result,{headers:{'Cache-Control':'public, max-age=3600'}}));}catch{}}
   }catch{result={places:[],unavailable:true};}
   if(recent.size>=250)recent.delete(recent.keys().next().value!);recent.set(id,{at:Date.now(),result});return result;

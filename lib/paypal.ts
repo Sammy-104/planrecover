@@ -3,6 +3,7 @@ import { config, db, loadState, saveState } from './store';
 import { financialTrip, type MoneyEvent } from './model';
 import { dataTripId, requirePayPalCurrency, requireCaptureLedgerMatch, verifiedOrderCapture, type PaymentOperation, type ProviderOrder } from './payment-guards';
 import {commitFinancialEffect} from './financial-history';
+import {captureShares,retainedPaymentMetadata} from './merchant-funding.ts';
 
 // This beta adapter must never send demo merchant transactions to production.
 const base = 'https://api-m.sandbox.paypal.com';
@@ -49,16 +50,16 @@ export async function reconcileCapture(owner: string, op: PaymentOperation, data
   if (!existing.length) {
     const event: MoneyEvent = {
       id: `paypal-${capture.id}`, itemId: item.id, kind: 'expense', label: `${item.name} · sandbox payment`,
-      shares: { [op.member]: op.amount }, contributions: { [op.member]: op.amount }, amount: op.amount,
+      shares: captureShares(op), contributions: { [op.member]: op.amount }, amount: op.amount,
       status: 'confirmed', evidence: `Server-verified sandbox capture ${capture.id}. Booking confirmation is separate.`,
       mode: 'sandbox', created: new Date().toISOString(), providerId: capture.id,
     };
     await commitFinancialEffect(db(),{owner,planId:trip.plan.id!,event,
-      operation:{id:op.id,status:'captured',payload:JSON.stringify({...data,planrecoverTripId:providerTripId(op),planrecoverCurrency:'CAD'})},
+      operation:{id:op.id,status:'captured',payload:JSON.stringify({...data,planrecoverTripId:providerTripId(op),planrecoverCurrency:'CAD',...retainedPaymentMetadata(op)})},
       markPaid:{memberId:op.member,revision:op.revision,amount:op.amount}});
   }else{
     await commitFinancialEffect(db(),{owner,planId:trip.plan.id!,event:existing[0],
-      operation:{id:op.id,status:'captured',payload:JSON.stringify({...data,planrecoverTripId:providerTripId(op),planrecoverCurrency:'CAD'})}});
+      operation:{id:op.id,status:'captured',payload:JSON.stringify({...data,planrecoverTripId:providerTripId(op),planrecoverCurrency:'CAD',...retainedPaymentMetadata(op)})}});
   }
   return capture;
 }

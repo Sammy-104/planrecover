@@ -41,6 +41,7 @@ yarn-error.log*
 next-env.d.ts
 /dist/
 /build/
+/public/vendor/pdfjs/
 /.wrangler/
 # Checkout-local execution profile and tool state; never publish them.
 /.sites-runtime/

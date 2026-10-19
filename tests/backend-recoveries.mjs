@@ -7,6 +7,7 @@ import {createTestD1,applyMigrations} from './helpers/d1.mjs';
 import {PlanRepository} from '../lib/plan-repository.ts';
 import {accountPersonId,makePerson} from '../lib/people.ts';
 import {commitFinancialEffect} from '../lib/financial-history.ts';
+import {freezeMerchantFunding} from '../lib/merchant-funding.ts';
 import {RecoveryService,maximumCaptureRefund,recoveryRequest,cancelRecoveredBooking,reserveCaptureRefund,
   confirmCaptureRefund,reconcileRecoveryRefund,finalizeConfirmedRecoveries,recoveryRefundBody} from '../lib/recovery-service.ts';
 
@@ -30,29 +31,30 @@ try{
   const capture=(id,amount)=>({id,status:'COMPLETED',amount:{currency_code:'CAD',value:(amount/100).toFixed(2)}});
   const refund=(id,captureId,amount,status='COMPLETED')=>({id,status,amount:{currency_code:'CAD',value:(amount/100).toFixed(2)},
     links:[{rel:'up',href:`https://api-m.sandbox.paypal.com/v2/payments/captures/${captureId}`}]});
-  async function check(name,callback,additionalMembers=0){const database=createTestD1();globalThis.recoveryTestEnv.DB=database;networkCalls=[];
-    try{const fixture=await seed(database,additionalMembers);await callback(fixture);checks++;console.log(`PASS ${name}`);}finally{database.close();}}
-  async function seed(database,additionalMembers=0){
+  async function check(name,callback,additionalMembers=0,wholeGroup=false){const database=createTestD1();globalThis.recoveryTestEnv.DB=database;networkCalls=[];
+    try{const fixture=await seed(database,additionalMembers,wholeGroup);await callback(fixture);checks++;console.log(`PASS ${name}`);}finally{database.close();}}
+  async function seed(database,additionalMembers=0,wholeGroup=false){
     const repository=new PlanRepository(database),record=await repository.createPlan(owner,alice,{kind:'day-out',name:'Recovery tests',
       destination:'Toronto, Ontario, Canada',start:'2027-04-04',end:'2027-04-04',timezone:'America/Toronto',currency:'CAD',budget:30000});
     const state=await repository.loadWorkspace(owner);state.people=[makePerson(alice.id,'Alice','owner'),makePerson(bob.id,'Bob','editor')];
-    const captureRows=[[0,alice.id,6000],[1,bob.id,4000]];
+    const allocationRows=[[0,alice.id,6000],[1,bob.id,4000]];
     for(let index=2;index<2+additionalMembers;index++){const id=await accountPersonId(`recovery-extra-account-${index}`);
-      state.people.push(makePerson(id,`Member ${index}`,'editor'));captureRows.push([index,id,1000]);}
-    const participants=captureRows.map(row=>row[1]),shares=Object.fromEntries(captureRows.map(row=>[row[1],row[2]]));
+      state.people.push(makePerson(id,`Member ${index}`,'editor'));allocationRows.push([index,id,1000]);}
+    const participants=allocationRows.map(row=>row[1]),shares=Object.fromEntries(allocationRows.map(row=>[row[1],row[2]])),captureRows=wholeGroup?[[0,alice.id,allocationRows.reduce((sum,row)=>sum+row[2],0)]]:allocationRows;
     state.items=[{id:'museum',name:'Fictional museum tour',category:'Activity',start:'2027-04-04T12:00:00-04:00',duration:60,
       price:captureRows.reduce((sum,row)=>sum+row[2],0),participants,shares,allocation:'fixed',values:{...shares},
       revision:1,approvals:[...participants],status:'scheduled',booking:'demo-confirmed',policy:'Fictional confirmed source terms',
       source:'Fictional demo merchant · synthetic museum catalog',expires:null,deadline:null,depends:[],paid:[...participants],location:'Toronto'}];
-    state.events=[];const orders=new Map(),captures=new Map(),refunds=new Map(),created=[];
+    if(wholeGroup)state.items[0].merchantFunding={mode:'whole-group',payerId:alice.id};
+    state.events=[];if(wholeGroup)state.version=(await repository.saveWorkspace(owner,state,state.version)).version;const orders=new Map(),captures=new Map(),refunds=new Map(),created=[];
     for(const [index,member,amount]of captureRows){
       const operation={id:`ORDEROP${index}`,owner,item_id:'museum',member,revision:1,kind:'order',amount,provider_id:`ORDER${index}`,status:'captured'};
       const canonical=order(operation,`CAPTURE${index}`);orders.set(operation.provider_id,canonical);captures.set(`CAPTURE${index}`,capture(`CAPTURE${index}`,amount));
-      operation.payload=JSON.stringify({...canonical,planrecoverTripId:record.state.plan.id,planrecoverCurrency:'CAD'});
+      operation.payload=JSON.stringify({...canonical,planrecoverTripId:record.state.plan.id,planrecoverCurrency:'CAD',...(wholeGroup?{planrecoverFunding:freezeMerchantFunding(state.items[0])}:{})});
       await database.prepare('INSERT INTO provider_operations(id,owner,item_id,member,revision,kind,amount,provider_id,status,payload) VALUES (?,?,?,?,?,?,?,?,?,?)')
         .bind(operation.id,owner,operation.item_id,member,1,'order',amount,operation.provider_id,'captured',operation.payload).run();
       state.events.push({id:`paypal-CAPTURE${index}`,providerId:`CAPTURE${index}`,itemId:'museum',kind:'expense',amount,
-        shares:{[member]:amount},contributions:{[member]:amount},status:'confirmed',mode:'sandbox',label:'Verified fixture sandbox capture',
+        shares:wholeGroup?{...shares}:{[member]:amount},contributions:{[member]:amount},status:'confirmed',mode:'sandbox',label:'Verified fixture sandbox capture',
         evidence:'Canonical injected provider fixture; no live transaction.',created:'2026-10-14T12:00:00Z'});
     }
     await repository.saveWorkspace(owner,state,state.version);
@@ -421,5 +423,8 @@ try{
     assert.equal(refunds.reduce((n,e)=>n+(e.contributions[alice.id]??0),0),-4200);assert.equal(refunds.reduce((n,e)=>n+(e.contributions[bob.id]??0),0),-2800);
     assert.equal(final.items[0].status,'cancelled');
   });
+  await check('Whole-group recovery refunds only the original funder and reverses approved consumption shares exactly',async f=>{let proposal=await f.approve(await f.proposal());assert.equal(proposal.snapshot.allocations.length,1);assert.equal(proposal.snapshot.allocations[0].memberId,alice.id);assert.equal(proposal.snapshot.allocations[0].captured,10000);assert.equal(proposal.snapshot.allocations[0].amount,7000);assert.deepEqual(proposal.snapshot.allocations[0].costShares,{[alice.id]:4200,[bob.id]:2800});await f.execute(proposal);const state=(await f.repository.getPlan(f.scope.planId,alice)).state,refunds=state.events.filter(event=>event.kind==='refund');assert.equal(refunds.length,1);assert.deepEqual(refunds[0].contributions,{[alice.id]:-7000});assert.deepEqual(refunds[0].shares,{[alice.id]:-4200,[bob.id]:-2800});await f.execute(proposal);assert.equal(f.created.length,1);},0,true);
+  await check('Departure of the whole-group funder retains their original capture and refund identity',async f=>{const {PlanChangeService}=await import('../lib/plan-changes.ts'),changes=new PlanChangeService(f.database),change=await changes.propose(f.scope.planId,alice,{type:'departure',version:await f.currentVersion(),memberId:alice.id});for(const person of [alice,bob])await changes.act(f.scope.planId,person,{type:'approve',changeId:change.id,version:await f.currentVersion(),confirm:true});await changes.act(f.scope.planId,alice,{type:'apply',changeId:change.id,version:await f.currentVersion(),confirm:true});const state=(await f.repository.getPlan(f.scope.planId,alice)).state,item=state.items[0],input=await f.policyInput();assert.deepEqual(item.participants,[bob.id]);assert.deepEqual(state.events[0].contributions,{[alice.id]:10000});input.revision=item.revision;const policy=await f.service.registerPolicy(f.scope,input);let proposal=await f.service.propose(f.scope,{type:'propose',version:await f.currentVersion(),policyId:policy.id,reason:'Cancellation after the designated payer leaves the activity.'});proposal=await f.approve(proposal);await f.execute(proposal);const final=(await f.repository.getPlan(f.scope.planId,alice)).state,refund=final.events.find(event=>event.kind==='refund');assert.deepEqual(refund.contributions,{[alice.id]:-7000});assert.deepEqual(refund.shares,{[bob.id]:-7000});},0,true);
+  await check('A paid whole-group allocation revision preserves original capture authority for refund review',async f=>{const initial=await f.repository.getPlan(f.scope.planId,alice);await f.repository.updatePlan(f.scope.planId,alice,initial.version,{type:'item_edit',actor:alice.id,itemId:'museum',participants:[alice.id,bob.id],price:10000,allocation:'fixed',values:{[alice.id]:2000,[bob.id]:8000}});for(const person of [alice,bob]){const record=await f.repository.getPlan(f.scope.planId,person);await f.repository.updatePlan(f.scope.planId,person,record.version,{type:'approve_item',actor:person.id,itemId:'museum',revision:2});}const current=(await f.repository.getPlan(f.scope.planId,alice)).state;assert.equal(current.items[0].funding.revision,1);const input=await f.policyInput();input.revision=2;const policy=await f.service.registerPolicy(f.scope,input);let proposal=await f.service.propose(f.scope,{type:'propose',version:await f.currentVersion(),policyId:policy.id,reason:'The approved allocation changed while original merchant funding was retained.'});proposal=await f.approve(proposal);assert.equal(proposal.snapshot.allocations[0].memberId,alice.id);assert.deepEqual(proposal.snapshot.allocations[0].costShares,{[alice.id]:1400,[bob.id]:5600});await f.execute(proposal);const final=(await f.repository.getPlan(f.scope.planId,alice)).state;assert.deepEqual(final.events.find(e=>e.kind==='refund').contributions,{[alice.id]:-7000});},0,true);
   console.log(`${checks} generalized recovery checks passed.`);
 }finally{globalThis.fetch=originalFetch;rmSync(temp,{recursive:true,force:true});}
