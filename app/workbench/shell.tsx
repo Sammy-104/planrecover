@@ -13,7 +13,7 @@ function dateRange(start:string,end:string){const f=(d:string,year:boolean)=>new
 
 export function visibleNav(shared:boolean,simple:boolean):View[]{
  const base:View[]=simple?['home','plan','chat','discover','today']:['home','plan','chat','discover','today','money','decisions'];
- return shared?base.filter(v=>v!=='home'):base;
+ return shared?base.filter(v=>v!=='home'):[...base,'settings'];
 }
 
 function PlanSwitcher({state,busy,shared,onSelect,onNew,onAll}:{state:State|null;busy:boolean;shared:boolean;onSelect:(id:string)=>void;onNew:()=>void;onAll:()=>void}){

@@ -35,7 +35,7 @@ export function shareToken(){return typeof window==='undefined'?'':new URLSearch
 export function apiHeaders(options?:RequestInit){const headers=new Headers(options?.headers);const token=shareToken();if(token)headers.set('x-trip-share',token);return headers;}
 export class WorkspaceError extends Error{constructor(message:string,public status:number){super(message);}}
 export async function jsonFetch(url:string,options?:RequestInit):Promise<any>{const r=await fetch(url,{...options,headers:apiHeaders(options),cache:'no-store'}),b=await r.json() as any;if(!r.ok)throw new WorkspaceError(b.error??'Something went wrong. Please try again.',r.status);return b;}
-export function PageHeading({eyebrow,title,subtitle}:{eyebrow:string;title:string;subtitle:string}){return <div className="page-heading"><div><h1>{title}</h1><p className="page-subtitle">{subtitle}</p></div></div>;}
+export function PageHeading({eyebrow,title,subtitle,actions}:{eyebrow:string;title:string;subtitle:string;actions?:ReactNode}){return <div className="page-heading"><div><h1>{title}</h1><p className="page-subtitle">{subtitle}</p></div>{actions&&<div className="heading-actions">{actions}</div>}</div>;}
 export function PhotoCredit({place}:{place:PlacePhoto}){
  return <>{place.imagePageUrl?<a href={place.imagePageUrl} target="_blank" rel="noreferrer">{place.imageCredit??'Photo source'}</a>:place.imageCredit??'Photo source'}{place.imageLicense&&<> · {place.imageLicenseUrl?<a href={place.imageLicenseUrl} target="_blank" rel="noreferrer">{place.imageLicense}</a>:place.imageLicense}</>}</>;
 }

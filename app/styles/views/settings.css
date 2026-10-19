@@ -1,1 +1,107 @@
-/* settings view */
+/* Settings, demo tools (merchant) and owner service panels. */
+
+/* ---------- Settings page ---------- */
+.settings-page { display: grid; gap: 0; }
+.settings-page > .page-heading { margin-bottom: 1rem; }
+.settings-section { display: grid; grid-template-columns: minmax(200px, 280px) minmax(0, 1fr); gap: 1rem 2.5rem; padding: 1.75rem 0; border-top: 1px solid var(--line); }
+.settings-section-intro h2 { font-size: var(--t-md); }
+.settings-section-intro p { color: var(--ink-3); font-size: var(--t-sm); margin-top: .3rem; }
+.settings-section-body { display: grid; gap: 1rem; min-width: 0; }
+
+.settings-card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg); box-shadow: var(--shadow-xs); padding: 1.15rem 1.25rem; min-width: 0; }
+.settings-card > .field:last-child { margin-bottom: 0; }
+.settings-card-title { font-size: var(--t-base); margin-bottom: .2rem; }
+.settings-card-text { color: var(--ink-2); font-size: var(--t-sm); }
+.settings-card-footer { display: flex; justify-content: flex-end; gap: .5rem; margin: 1rem -1.25rem -1.15rem; padding: .8rem 1.25rem; border-top: 1px solid var(--line); background: var(--surface-2); border-radius: 0 0 var(--r-lg) var(--r-lg); }
+
+.settings-disclosure { margin: .25rem 0 .5rem; border: 1px solid var(--line); border-radius: var(--r-md); }
+.settings-disclosure > summary { display: flex; align-items: center; gap: .5rem; padding: .6rem .8rem; font-size: var(--t-sm); font-weight: 560; color: var(--ink-2); }
+.settings-disclosure > summary::after { content: ""; margin-left: auto; width: 7px; height: 7px; border-right: 1.5px solid var(--ink-3); border-bottom: 1.5px solid var(--ink-3); transform: rotate(45deg); transition: transform .15s; }
+.settings-disclosure[open] > summary::after { transform: rotate(-135deg); }
+.settings-disclosure > :not(summary) { padding: 0 .8rem; }
+.settings-disclosure > :last-child:not(summary) { padding-bottom: .8rem; }
+.settings-disclosure > p { font-size: var(--t-sm); color: var(--ink-2); }
+.settings-disclosure > p + p { margin-top: .5rem; }
+
+.settings-rows { padding: .35rem 1.25rem; }
+.switch-line { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .7rem 0; font-size: var(--t-sm); font-weight: 520; color: var(--ink); cursor: pointer; }
+.switch-line + .switch-line { border-top: 1px solid var(--line); }
+
+.settings-status-list { list-style: none; margin: .6rem 0 0; padding: 0; }
+.settings-status-list > li { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .65rem 0; }
+.settings-status-list > li + li { border-top: 1px solid var(--line); }
+.settings-status-list > li > div { display: grid; min-width: 0; }
+.settings-status-list strong { font-size: var(--t-sm); }
+.settings-status-list small { color: var(--ink-3); font-size: var(--t-xs); }
+.settings-status-list + .source-footnote { margin-top: .5rem; }
+.push-device-list > li > span { font-size: var(--t-sm); color: var(--ink-2); }
+.settings-status-message { font-size: var(--t-sm); color: var(--ink-2); }
+.settings-status-message:empty { display: none; }
+
+.settings-links { display: grid; margin-top: .5rem; }
+.resource-link { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .6rem 0; color: var(--ink); text-decoration: none; font-size: var(--t-sm); font-weight: 520; }
+.resource-link + .resource-link { border-top: 1px solid var(--line); }
+.resource-link svg { color: var(--ink-4); flex-shrink: 0; transition: transform .15s, color .15s; }
+.resource-link:hover { color: var(--brand); }
+.resource-link:hover svg { color: var(--brand); transform: translateX(2px); }
+.background-checks .settings-disclosure { margin-top: .75rem; }
+
+/* ---------- Demo tools ---------- */
+.merchant-page > * + * { margin-top: 1.25rem; }
+.merchant-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; align-items: start; }
+.merchant-tool { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg); box-shadow: var(--shadow-xs); padding: 1.25rem; min-width: 0; }
+.merchant-tool h2 { font-size: var(--t-md); margin-top: .75rem; }
+.merchant-tool p { font-size: var(--t-sm); color: var(--ink-2); margin-top: .3rem; }
+.merchant-tool-head { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
+.merchant-tool-icon { display: grid; place-items: center; width: 38px; height: 38px; border-radius: var(--r-md); background: var(--brand-soft); color: var(--brand); }
+.merchant-tool-icon.danger { background: var(--bad-soft); color: var(--bad); }
+.merchant-price { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; margin-top: 1rem; padding: .7rem .85rem; border-radius: var(--r-md); background: var(--surface-2); }
+.merchant-price span { color: var(--ink-3); font-size: var(--t-sm); }
+.merchant-price strong { font-variant-numeric: tabular-nums; }
+.merchant-bookings { list-style: none; margin: .75rem 0 0; padding: 0; }
+.booking-row { display: flex; align-items: center; justify-content: space-between; gap: .75rem; padding: .6rem 0; }
+.booking-row + .booking-row { border-top: 1px solid var(--line); }
+.booking-row > div { display: grid; min-width: 0; }
+.booking-row strong { font-size: var(--t-sm); }
+.booking-row small { color: var(--ink-3); font-size: var(--t-xs); }
+.merchant-failed { color: var(--bad); font-weight: 600; }
+.invoice-panel { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(240px, 1fr); gap: 1.5rem; align-items: start; }
+.invoice-fixture { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .5rem; margin-top: 1rem; }
+.invoice-fixture span { display: grid; gap: .1rem; padding: .65rem .75rem; border: 1px solid var(--line); border-radius: var(--r-md); color: var(--ink-3); font-size: var(--t-xs); }
+.invoice-fixture strong { color: var(--ink); font-size: var(--t-md); font-variant-numeric: tabular-nums; }
+.invoice-form { padding: 1rem; border-radius: var(--r-md); background: var(--surface-2); border: 1px solid var(--line); }
+.invoice-form .source-footnote { margin-top: .5rem; }
+
+/* ---------- Owner service panels (/flows) ---------- */
+.service-readiness { display: grid; gap: .75rem; }
+.service-readiness .section-top { margin-bottom: 0; }
+.service-readiness > p { font-size: var(--t-sm); color: var(--ink-2); }
+.service-readiness-list { margin: 0; border: 1px solid var(--line); border-radius: var(--r-md); overflow: hidden; }
+.service-readiness-list > div { display: grid; grid-template-columns: minmax(140px, 220px) minmax(0, 1fr); gap: .25rem 1rem; padding: .65rem .85rem; font-size: var(--t-sm); }
+.service-readiness-list > div + div { border-top: 1px solid var(--line); }
+.service-readiness-list dt { font-weight: 600; color: var(--ink); }
+.service-readiness-list dd { margin: 0; color: var(--ink-2); display: grid; gap: .15rem; }
+.service-status { display: inline-flex; align-items: center; gap: .4rem; }
+.service-status::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--ink-4); flex-shrink: 0; }
+.service-status.ok::before { background: var(--ok); }
+.service-status.warn::before { background: var(--warn); }
+.service-status.bad::before { background: var(--bad); }
+.service-evidence { color: var(--ink-3); font-size: var(--t-xs); }
+.service-readiness .notice { display: block; }
+.service-readiness .notice h4 { margin-bottom: .25rem; }
+.service-readiness .notice p + p, .service-readiness .notice p + dl, .service-readiness .notice dl + p { margin-top: .4rem; }
+.service-readiness .notice dl > div { display: contents; }
+.service-readiness .notice dd { margin: 0; }
+.service-readiness > .btn { justify-self: start; }
+
+@media (max-width: 860px) {
+  .settings-section { grid-template-columns: 1fr; gap: .75rem; padding: 1.25rem 0; }
+  .merchant-grid, .invoice-panel { grid-template-columns: 1fr; }
+}
+@media (max-width: 520px) {
+  .invoice-fixture { grid-template-columns: 1fr; }
+  .service-readiness-list > div { grid-template-columns: 1fr; }
+  .settings-card { padding: 1rem; }
+  .settings-card-footer { margin: 1rem -1rem -1rem; padding: .75rem 1rem; }
+  .booking-row { flex-wrap: wrap; }
+}

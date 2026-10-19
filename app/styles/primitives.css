@@ -87,7 +87,7 @@ a.btn { text-decoration: none; }
 }
 .avatar.small { width: 24px; height: 24px; font-size: .625rem; }
 .avatar-stack { display: inline-flex; align-items: center; }
-.avatar-stack .avatar + .avatar { margin-left: -6px; }
+.avatar-stack .avatar + .avatar { margin-left: -4px; }
 
 /* ---------- Surfaces ---------- */
 .panel {
