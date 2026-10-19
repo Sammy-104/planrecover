@@ -2,6 +2,8 @@
 
 These tools operate on explicit provider exports. They do not authenticate to D1/R2, create a consistent hosted database export, schedule backups, upload data or activate a restored runtime. Source archives are not data backups. A platform-supported full database export and separately exported private object mirror remain prerequisites.
 
+Current hosted status, October 19, 2026: the Sites-managed deployment does not expose the full database export, complete private-object export and isolated hosted restore controls needed for this task. Hosted backup/restore remains blocked by those platform export controls and unverified. The owner-readable object route below covers only authorized retained objects; it does not establish a complete or consistent hosted backup. Offline fixture success does not remove that gate.
+
 ## Capture a private bundle
 
 Use Node24 and a new output whose parent already exists:

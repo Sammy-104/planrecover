@@ -505,6 +505,7 @@ export const t_adapter_operations=sqliteTable("adapter_operations",{
  updated:text("updated").notNull(),
 },table=>[
  index("adapter_operations_scope").on(table.owner,table.plan_id,table.created),
+ uniqueIndex("controlled_reminder_email_once").on(table.owner,table.plan_id,table.member_id,sql`json_extract(${table.request}, '$.sourceJobId')`).where(sql`${table.provider}='aws-ses' AND ${table.kind}='controlled-self-test'`),
 ]);
 
 export const t_agent_proposals=sqliteTable("agent_proposals",{

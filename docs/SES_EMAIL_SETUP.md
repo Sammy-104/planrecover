@@ -2,6 +2,8 @@
 
 The SES v2 adapter sends opted-in reminder jobs as plain-text emails. It stays disabled until the owner sets `AWS_SES_ENABLED=true`. No setup/readiness endpoint sends email. Existing in-app reminders continue independently. Native Web Push and signed SES outcomes/suppression are documented in [notification delivery setup](NOTIFICATION_DELIVERY_SETUP.md).
 
+An independent [controlled self-email test](CONTROLLED_SES_TEST_2026-10-19.md) can send one explicitly reviewed copy of one due in-app reminder using a short-lived private grant while normal email remains disabled. Preview/readiness never sends it; the owner must click the dedicated send button. Its attempt has no automatic retry, including provider throttling. SES acceptance and inbox delivery remain separate observations.
+
 ## Private runtime configuration
 
 The tracked placeholder list is `config/server.env.example`. Set actual values only in private server settings:
