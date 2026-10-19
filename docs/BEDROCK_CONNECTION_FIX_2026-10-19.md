@@ -18,6 +18,8 @@ Bedrock owner diagnostics now retain only a fixed failure stage, bounded HTTP st
 
 The corrected hosted connection reached HTTP 200 and a real saved chat response. Nova's observed leading explanatory wrapper is now removed before saving a new final answer; complete leading wrappers and a single whole-payload JSON fence can be normalized without searching arbitrary text for JSON. Malformed, nested or misplaced wrappers remain rejected. Structured calls request deterministic final JSON, and all application schema, participant, money and source checks remain authoritative. Console/connection success does not establish that every generated itinerary passes those checks.
 
+The hosted synthetic check subsequently passed with 110 reported tokens. A clean AI chat reply was restored after browser reload, and a one-item free itinerary preview passed validation without being applied. A separate synthetic receipt check exposed an ambiguous prompt: Nova returned JSON Schema properties containing values, rather than a receipt data instance. The receipt prompt now describes a flat data object with a concrete nullable template; schema-shaped replies remain rejected instead of being silently unwrapped or coerced. The stored source and manual/on-device fallback stay available when AI fails.
+
 ## Verification boundary
 
 Offline tests cover both Converse paths, safe diagnostic persistence/replay, redirect rejection and the other affected service adapters. A real Worker regression checks native redirect behavior. The hosted Service readiness result is stored separately in the owner's plan and must be inspected after publication.

@@ -8,6 +8,8 @@ AWS now shows an applied Canada Central Nova Lite cross-region quota of 400,000 
 
 The pre-fix hosted check failed before inference. A local real Worker reproduction identified unsupported `redirect: 'error'` as the connection bug. Affected adapters now use manual redirect handling and continue rejecting redirect responses, without forwarding credentials. Bedrock failures retain only allowlisted connection stage/status metadata for owner inspection. Hosted checks and feature acceptance remain distinct from this console and offline evidence; inspect the saved Service readiness result and the October 19 verification report. See [the connection fix](docs/BEDROCK_CONNECTION_FIX_2026-10-19.md).
 
+The corrected hosted synthetic check passed with 110 reported tokens. A real private chat reply survived reload, and Bedrock generated a validated 15-minute CAD 0 itinerary preview that was left unapproved. These observations do not certify every agent or receipt scenario. A synthetic image check separately identified the receipt prompt's ambiguity between a JSON Schema and a receipt data object; the prompt now requests a flat data instance while retaining strict validation and manual review.
+
 ## Audit corrections implemented
 
 - Distinct invoice refund evidence allocation, including bounded revalidation of old completion claims without rewriting financial history.
@@ -38,7 +40,7 @@ Code/fixture tests are distinct from configured and hosted-verified services. Co
 
 The existing Site remains owner-private. The last completed credential setup recorded runtime settings revision5: Bedrock, runner, PayPal and restricted SES secret names are present; SES sending is false. Secret presence is configuration, not proof of provider success. The current publication report records any newer revision and exact deployment; this source file contains no credentials.
 
-Remaining external gates: genuine Bedrock output after account/quota resolution; multi-user checkout and invoice deposit/balance/refund; activated signed webhook ingress; enabled/unattended existing schedule; a selected real supplier; controlled SES/device delivery and signed callbacks; hosted database/object export and restore; external alert reception. Code and injected fixtures do not close these gates. This batch makes no Bedrock call and activates no sending, public ingress or schedule.
+Remaining external gates: broader Bedrock feature acceptance beyond the observed synthetic/chat/draft checks; multi-user checkout and invoice deposit/balance/refund; activated signed webhook ingress; enabled/unattended existing schedule; a selected real supplier; controlled SES/device delivery and signed callbacks; hosted database/object export and restore; external alert reception. Code and injected fixtures do not close these gates. The October 18 batch made no Bedrock call; the bounded October 19 checks are recorded above and activate no sending, public ingress or schedule.
 
 Optional whole-group CAD sandbox funding and split-contribution receipts are implemented in the current source batch, with final validation in the publication report. All affected members approve the exact amount/funder; funding claims reserve the full group and preserve the original contributor for capture/refund. Receipt contributions sum exactly to the total and retain contributor identities through immutable corrections. Defaults remain individual checkout/single receipt payer.
 

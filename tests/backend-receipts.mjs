@@ -65,6 +65,35 @@ try{
   const reopened=await decoded(await routes.receipt.GET(request(`/api/receipt?draftId=${uploaded.draft.id}`)));
   assert.deepEqual(reopened.draft.sourceFacts,uploaded.draft.sourceFacts);
  });
+ await check('Bedrock requests a flat receipt instance instead of echoing a JSON Schema',async({repository,state})=>{
+  configured();let calls=0;
+  const flat={...facts,items:[{name:'Meal',amountCents:1000,quantityMilli:1000,unitPriceCents:1000,lineDiscountCents:null}]};
+  provider=async(_url,init)=>{calls++;const body=JSON.parse(init.body),instructions=body.system.map(block=>block.text).join('\n');
+   assert.match(instructions,/one flat receipt DATA object, NOT a JSON Schema/);
+   assert.match(instructions,/Do not add type, properties, value or required wrappers/);
+   assert.match(instructions,/"merchant":null,"date":null,"currency":null,"items":\[/);
+   assert.doesNotMatch(instructions,/"(?:type|properties|required|additionalProperties)"\s*:/);
+   assert.match(instructions,/YYYY-MM-DD/);assert.match(instructions,/integer smallest units/);assert.match(instructions,/from 0 to 1000000000000/);
+   assert.match(instructions,/omit that line and flag it/);assert.match(instructions,/missing is not zero/);
+   assert.match(body.messages[0].content[0].text,/flat receipt data object/);
+   return modelResponse(flat);
+  };
+  const before=await repository.loadWorkspace(owner),uploaded=await upload(state);
+  assert.equal(calls,1);assert.equal(uploaded.draft.status,'review-required');assert.equal(uploaded.draft.provider,'bedrock');
+  assert.deepEqual(uploaded.draft.sourceFacts,flat);assert.equal(uploaded.receipt.total,1250);
+  const after=await repository.loadWorkspace(owner);assert.equal(after.version,before.version);assert.deepEqual(after.events,before.events);assert.deepEqual(after.receipts,before.receipts);
+ });
+ await check('Echoed schema wrappers and string or fractional money remain rejected without coercion',async({objects,repository,state})=>{
+  configured();let calls=0;
+  const echoed={type:'object',properties:Object.fromEntries(Object.entries(facts).map(([key,value])=>[key,{type:key==='items'?'array':['string','null'],value}])),required:Object.keys(facts)};
+  for(const value of [echoed,{...facts,totalCents:'1250'},{...facts,items:[{name:'Meal',amountCents:10.5}]}]){
+   provider=async()=>{calls++;return modelResponse(value);};
+   const uploaded=await upload(state);assert.equal(uploaded.draft.status,'failed');assert.equal(uploaded.draft.sourceFacts,null);
+   assert.match(uploaded.note,/complete validated extraction/);assert.ok(uploaded.reviewFields.includes('totalCents'));
+   const reopened=await decoded(await routes.receipt.GET(request(`/api/receipt?draftId=${uploaded.draft.id}`)));assert.equal(reopened.draft.sourceFacts,null);
+  }
+  assert.equal(calls,3);assert.equal(objects.size,3);assert.equal((await repository.loadWorkspace(owner)).events.length,0);
+ });
  await check('Review requires resolved fields, exact arithmetic and the same source; save creates no automatic expense',async({repository,state})=>{
   configured();provider=async()=>modelResponse({...facts,items:[{name:'Meal',amountCents:null}],tipCents:null});
   const uploaded=await upload(state),receipt=reviewed(uploaded);
