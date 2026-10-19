@@ -13,7 +13,7 @@ import {ActivityMedia} from '@/components/activity-media';
 export type View='today'|'home'|'chat'|'plan'|'discover'|'money'|'decisions'|'merchant'|'settings';
 export type Collaboration={shared:boolean;canManage:boolean;sharingEnabled:boolean;canEdit?:boolean;signedIn?:boolean;memberId?:string;displayName?:string;role?:string;canJoin?:boolean;linkRole?:string};
 export type Config={paypal:boolean;clientId:string;ai:boolean;webhook:boolean;bedrock?:boolean};
-export const nav=[{id:'chat',label:'Chat',icon:MessageCircle},{id:'today',label:'Today',icon:Sun},{id:'home',label:'Home',icon:House},{id:'plan',label:'Plan',icon:CalendarDays},{id:'discover',label:'Discover',icon:Compass},{id:'money',label:'Money',icon:Wallet},{id:'decisions',label:'To do',icon:CheckCheck},{id:'merchant',label:'Demo tools',icon:Store},{id:'settings',label:'Settings',icon:SlidersHorizontal}] as const;
+export const nav=[{id:'home',label:'All plans',icon:House},{id:'today',label:'Today',icon:Sun},{id:'plan',label:'Plan',icon:CalendarDays},{id:'discover',label:'Discover',icon:Compass},{id:'chat',label:'Chat',icon:MessageCircle},{id:'money',label:'Money',icon:Wallet},{id:'decisions',label:'To do',icon:CheckCheck},{id:'merchant',label:'Demo tools',icon:Store},{id:'settings',label:'Settings',icon:SlidersHorizontal}] as const;
 export const PeopleContext=createContext<readonly PlanPerson[]>(demoMembers.map(m=>({...m,role:'editor' as const})));
 export const EditingContext=createContext(true);
 export function useGroup(){const members=useContext(PeopleContext);return {members,memberIds:members.filter(m=>m.role!=='viewer'&&m.role!=='legacy').map(m=>m.id),name:(id:string)=>members.find(m=>m.id===id)?.name??(id==='guest'?'Guest':'Previous participant')};}
