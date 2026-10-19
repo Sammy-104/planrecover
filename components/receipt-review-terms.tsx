@@ -5,7 +5,7 @@ import {receiptRequiredMembers} from '@/lib/receipt-accounting';
 
 export function ReceiptReviewTerms({receipt,state,members,currency}:{receipt:Receipt;state:State;members:readonly {id:string;name:string}[];currency:string}){
  const required=receiptRequiredMembers(receipt,members.map(member=>member.id)),name=(id:string)=>members.find(member=>member.id===id)?.name??id;
- const previous=receipt.previousShares,contributions=receipt.recording==='evidence'?receipt.previousContributions??{}:{[receipt.payer]:receipt.total};
+ const previous=receipt.previousShares,contributions=receipt.recording==='evidence'?receipt.previousContributions??{}:receipt.contributions??{[receipt.payer]:receipt.total};
  const purchase=state.items.find(item=>item.id===receipt.linkedItemId);
  return <div className="terms-box"><h3>Receipt terms · revision {receipt.revision}</h3><p>{formatMoney(receipt.total,currency)} {currency} · {purchase?`Reconciles ${purchase.name}`:'Separate purchase'}</p>
   <p>{receipt.recording==='evidence'?'Evidence for recorded payment. Original payers and payment amounts are retained.':'Manually reported purchase. Approval records the exact shares and payer contribution below.'}</p>

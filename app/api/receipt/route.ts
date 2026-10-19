@@ -61,8 +61,8 @@ export async function POST(request: Request) {
     if(form.get('tripId')&&form.get('tripId')!==current.state.plan.id)
       throw new BackendError('PLAN_CHANGED','The active plan changed. Refresh before uploading receipts.',409);
     if(!env.BUCKET)throw Error('Receipt storage unavailable.');
-    const bytes=new Uint8Array(await file.arrayBuffer()),key=`${await prefix(current.access.id)}/${crypto.randomUUID()}`;
-    await db().prepare("INSERT INTO receipt_objects(file_key,owner,plan_id,status,created) VALUES (?,?,?,'staged',?)").bind(key,current.scope.owner,current.scope.planId,new Date().toISOString()).run();
+    const bytes=new Uint8Array(await file.arrayBuffer()),key=`${await prefix(current.access.id)}/${crypto.randomUUID()}`,sourceHash=await sourceDigest(bytes);
+    await db().prepare("INSERT INTO receipt_objects(file_key,owner,plan_id,status,created,source_sha256) VALUES (?,?,?,'staged',?,?)").bind(key,current.scope.owner,current.scope.planId,new Date().toISOString(),sourceHash).run();
     await env.BUCKET.put(key,bytes,{httpMetadata:{contentType:file.type}});
     let draft;
     try {draft=await current.repository.create(current.scope,{fileKey:key,mime:file.type,size:file.size});}
@@ -89,5 +89,9 @@ export async function PATCH(request: Request) {
 }
 async function prefix(id: string) {
   const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(id));
+  return Array.from(new Uint8Array(digest),value=>value.toString(16).padStart(2,'0')).join('');
+}
+async function sourceDigest(bytes:Uint8Array){
+  const digest=await crypto.subtle.digest('SHA-256',bytes as BufferSource);
   return Array.from(new Uint8Array(digest),value=>value.toString(16).padStart(2,'0')).join('');
 }

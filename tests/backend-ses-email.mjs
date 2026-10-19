@@ -7,7 +7,7 @@ import {applyAction} from '../lib/model.ts';
 import {PlanningPreferencesRepository,defaultPlanningPreferences} from '../lib/planning-constraints.ts';
 import {syncPlanReminders,reminderDeliveryConfiguration} from '../lib/reminder-jobs.ts';
 import {runExternalReminderJobs,saveNotificationDestination} from '../lib/notification-adapter.ts';
-import {sesEmailConfig,sendSesEmail} from '../lib/ses-email.ts';
+import {sesEmailConfig,sendSesEmail,sesDigest} from '../lib/ses-email.ts';
 
 const owner='ses-fixture-owner',alice={id:await accountPersonId(owner),name:'Alice'},now=Date.parse('2027-04-04T13:00:00Z');
 const settings={AWS_SES_ENABLED:'true',AWS_SES_REGION:'ca-central-1',AWS_SES_FROM_EMAIL:'reminders@example.test',AWS_SES_ACCESS_KEY_ID:'AKIA'+'A'.repeat(16),AWS_SES_SECRET_ACCESS_KEY:'s'.repeat(40)};
@@ -108,5 +108,10 @@ await check('Membership, explicit opt-in, signed-in destination verification and
 
 await check('The signed request rechecks eligibility immediately before dispatch',async()=>{
  let calls=0;await assert.rejects(sendSesEmail(sesEmailConfig(settings),{destination:'alice@example.test',title:'Reminder',text:'Plan reminder',attemptId:'fixture-attempt'},{now:new Date(now),beforeSend:async()=>false,fetch:async()=>{calls++;return accepted();}}),error=>error.outcome==='not-sent');assert.equal(calls,0);
+});
+for(const stage of ['before-reservation','before-dispatch'])await check('Verified bounce suppression '+stage+' blocks an SES call',async({database,planId})=>{
+ const suppress=async()=>{const existing=database.sqlite.prepare("SELECT id FROM adapter_operations WHERE provider='aws-ses' LIMIT 1").get();let id=existing?.id;if(!id){id='suppression-fixture-attempt';await database.prepare("INSERT INTO adapter_operations(id,owner,plan_id,member_id,provider,kind,request,status,created,updated) VALUES (?,?,?,?,'aws-ses','send-email','{}','completed',?,?)").bind(id,owner,planId,alice.id,new Date(now).toISOString(),new Date(now).toISOString()).run();}await database.prepare("INSERT INTO notification_delivery_events(id,attempt_id,owner,plan_id,member_id,provider_message_id,event_type,occurred_at,received_at,digest,reason) VALUES ('suppression-fixture-event',?,?,?,?,'fixture-message','bounce',?,?,'fixture-digest','hard-bounce')").bind(id,owner,planId,alice.id,new Date(now).toISOString(),new Date(now).toISOString()).run();await database.prepare("INSERT INTO notification_suppressions(owner,destination_hash,reason,suppressed_until,event_id,updated) VALUES (?,?,'hard-bounce',NULL,'suppression-fixture-event',?)").bind(owner,await sesDigest('alice@example.test'),new Date(now).toISOString()).run();};
+ if(stage==='before-reservation')await suppress();else{const prepare=database.prepare.bind(database);let changed=false;database.prepare=sql=>{const statement=prepare(sql);if(sql.startsWith('INSERT OR IGNORE INTO adapter_operations')){const bind=statement.bind.bind(statement);statement.bind=(...values)=>{const bound=bind(...values),execute=bound.run.bind(bound);bound.run=async()=>{const result=await execute();if(!changed&&result.meta.changes){changed=true;await suppress();}return result;};return bound;};}return statement;};}
+ let calls=0;await run(database,async()=>{calls++;return accepted();});assert.equal(calls,0);assert.ok(['ses-recipient-suppressed','ses-source-changed'].includes(job(database).last_error));
 });
 console.log(`SES email: ${checks} offline migration, signing, privacy and no-duplicate checks passed.`);

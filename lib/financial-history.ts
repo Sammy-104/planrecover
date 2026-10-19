@@ -3,6 +3,7 @@ import {BackendError,conflict} from './backend-errors.ts';
 import {PlanRepository} from './plan-repository.ts';
 import {planCurrency} from './money.ts';
 import {accountingItemIds,purchaseEvents} from './receipt-accounting.ts';
+import {freezeMerchantFunding,equalMoneyMaps} from './merchant-funding.ts';
 
 const sorted=(values:Record<string,number>)=>Object.fromEntries(Object.entries(values).sort(([a],[b])=>a.localeCompare(b)));
 export function financialEventFacts(event:MoneyEvent){return JSON.stringify({id:event.id,itemId:event.itemId,
@@ -12,7 +13,7 @@ export function approvedItemSnapshot(item:Item){return JSON.stringify({id:item.i
  name:item.name,category:item.category,start:item.start,duration:item.duration,price:item.price,
  participants:[...item.participants].sort(),shares:sorted(item.shares),allocation:item.allocation,
  values:sorted(item.values),required:[...(item.required??item.participants)].sort(),policy:item.policy,
- expires:item.expires,deadline:item.deadline,source:item.source,...(item.dependencyEvidence?{depends:[...item.depends].sort(),dependencyEvidence:item.dependencyEvidence}:{}),...(item.funding?{funding:item.funding}:{}),...(item.collection?{collection:item.collection}:{})});}
+ expires:item.expires,deadline:item.deadline,source:item.source,...(item.dependencyEvidence?{depends:[...item.depends].sort(),dependencyEvidence:item.dependencyEvidence}:{}),...(item.funding?{funding:item.funding}:{}),...(item.collection?{collection:item.collection}:{}),...(item.merchantFunding?{merchantFunding:item.merchantFunding}:{})});}
 export async function sha256(value:string){return [...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(value)))].map(n=>n.toString(16).padStart(2,'0')).join('');}
 
 /** Facts and approval snapshots cannot be overwritten; status changes append history. */
@@ -20,6 +21,10 @@ export async function financialSnapshotWrites(database:D1Database,owner:string,s
  const commands:D1PreparedStatement[]=[],now=new Date().toISOString();
  for(const state of states){
   const planId=state.plan.id;if(!planId)continue;
+  const persisted=await database.prepare('SELECT body FROM plans WHERE owner=? AND id=?').bind(owner,planId).first<{body:string}>(),oldItems:Item[]=persisted?JSON.parse(persisted.body).items:[];
+  for(const item of state.items){const prior=oldItems.find(value=>value.id===item.id);if(JSON.stringify(prior?.merchantFunding??null)===JSON.stringify(item.merchantFunding??null))continue;
+   const fundingGuard=crypto.randomUUID();commands.push(database.prepare(`INSERT INTO backend_write_guards(id,valid) VALUES (?,CASE WHEN NOT EXISTS(SELECT 1 FROM payment_funding_claims WHERE owner=? AND plan_id=? AND item_id=?) AND NOT EXISTS(SELECT 1 FROM provider_operations WHERE owner=? AND item_id=? AND kind='order' AND status NOT IN ('cancelled','unsubmitted','failed') AND json_extract(payload,'$.planrecoverTripId')=?) AND NOT EXISTS(SELECT 1 FROM plan_invoices WHERE owner=? AND plan_id=? AND item_id=? AND status<>'cancelled') THEN 1 ELSE 0 END)`).bind(fundingGuard,owner,planId,item.id,owner,item.id,planId,owner,planId,item.id));commands.push(database.prepare('DELETE FROM backend_write_guards WHERE id=?').bind(fundingGuard));
+  }
   for(const event of state.events){
    const facts=financialEventFacts(event),body=JSON.stringify(event),fingerprint=await sha256(body),guard=crypto.randomUUID();
    if(event.kind==='expense'&&event.mode==='manual'){
@@ -58,6 +63,10 @@ export async function financialSnapshotWrites(database:D1Database,owner:string,s
 export type FundingClaim={owner:string;planId:string;itemId:string;revision:number;memberId:string;channel:'order'|'invoice';referenceId:string;version?:number};
 export async function claimPaymentFunding(database:D1Database,input:FundingClaim){
  const plan=await database.prepare('SELECT body FROM plans WHERE owner=? AND id=?').bind(input.owner,input.planId).first<{body:string}>(),accountingIds=plan?accountingItemIds(JSON.parse(plan.body) as State,input.itemId):[input.itemId];
+ const item:Item|undefined=plan?JSON.parse(plan.body).items.find((value:Item)=>value.id===input.itemId):undefined,group=item?freezeMerchantFunding(item):undefined;
+ if(group&&(input.channel!=='order'||input.memberId!==group.payerId||input.revision!==group.revision))throw new BackendError('GROUP_FUNDING_CHANNEL','The designated whole-group payer must use the approved group checkout.',409);
+ const fundingMembers=group?group.participants:[input.memberId];
+ if(group){const competing=await database.prepare('SELECT reference_id FROM payment_funding_claims WHERE owner=? AND plan_id=? AND item_id=? AND reference_id<>? LIMIT 1').bind(input.owner,input.planId,input.itemId,input.referenceId).first();if(competing)throw new BackendError('PAYMENT_CHANNEL_CONFLICT','Resolve the existing checkout or invoice before collecting this whole-group booking again.',409);}
  const expense=await database.prepare(`SELECT 1 AS paid FROM financial_events e WHERE owner=? AND plan_id=? AND kind='expense'
   AND json_extract(facts,'$.itemId') IN (SELECT value FROM json_each(?)) AND EXISTS(SELECT 1 FROM json_each(json_extract(e.facts,'$.shares')) WHERE key=? AND value>0)
   AND EXISTS(SELECT 1 FROM financial_event_history h WHERE h.owner=e.owner AND h.plan_id=e.plan_id AND h.event_id=e.event_id AND h.status='confirmed') LIMIT 1`)
@@ -73,8 +82,11 @@ export async function claimPaymentFunding(database:D1Database,input:FundingClaim
     ${input.version===undefined?'':'AND p.version=?'} AND json_extract(i.value,'$.id')=? AND json_extract(i.value,'$.revision')=?
     AND json_extract(i.value,'$.status')<>'cancelled') THEN 1 ELSE 0 END)`)
    .bind(token,input.owner,input.planId,...(input.version===undefined?[]:[input.version]),input.itemId,input.revision),
-  database.prepare('INSERT OR IGNORE INTO payment_funding_claims(owner,plan_id,item_id,revision,member_id,channel,reference_id,created) VALUES (?,?,?,?,?,?,?,?)')
-   .bind(input.owner,input.planId,input.itemId,input.revision,input.memberId,input.channel,input.referenceId,new Date().toISOString()),
+  ...(group?[database.prepare(`INSERT INTO backend_write_guards(id,valid) VALUES (?,CASE WHEN NOT EXISTS(SELECT 1 FROM provider_operations WHERE owner=? AND item_id=? AND kind='order' AND id<>? AND status NOT IN ('cancelled','unsubmitted','failed') AND COALESCE(json_extract(payload,'$.planrecoverTripId'),?)=?) AND NOT EXISTS(SELECT 1 FROM plan_invoices WHERE owner=? AND plan_id=? AND item_id=? AND status<>'cancelled') THEN 1 ELSE 0 END)`).bind(`${token}-legacy`,input.owner,input.itemId,input.referenceId,input.planId,input.planId,input.owner,input.planId,input.itemId),database.prepare('DELETE FROM backend_write_guards WHERE id=?').bind(`${token}-legacy`)]:[]),
+  ...fundingMembers.map(member=>database.prepare('INSERT OR IGNORE INTO payment_funding_claims(owner,plan_id,item_id,revision,member_id,channel,reference_id,created) VALUES (?,?,?,?,?,?,?,?)')
+   .bind(input.owner,input.planId,input.itemId,input.revision,member,input.channel,input.referenceId,new Date().toISOString())),
+  ...(group?fundingMembers.map(member=>database.prepare(`INSERT INTO backend_write_guards(id,valid) VALUES (?,CASE WHEN EXISTS(SELECT 1 FROM payment_funding_claims WHERE owner=? AND plan_id=? AND item_id=? AND revision=? AND member_id=? AND channel=? AND reference_id=?) AND NOT EXISTS(SELECT 1 FROM payment_funding_claims WHERE owner=? AND plan_id=? AND item_id=? AND reference_id<>?) AND NOT EXISTS(SELECT 1 FROM financial_events e WHERE e.owner=? AND e.plan_id=? AND e.kind='expense' AND json_extract(e.facts,'$.itemId') IN (SELECT value FROM json_each(?)) AND EXISTS(SELECT 1 FROM financial_event_history h WHERE h.owner=e.owner AND h.plan_id=e.plan_id AND h.event_id=e.event_id AND h.status='confirmed')) THEN 1 ELSE 0 END)`).bind(`${token}-${member}`,input.owner,input.planId,input.itemId,input.revision,member,input.channel,input.referenceId,input.owner,input.planId,input.itemId,input.referenceId,input.owner,input.planId,JSON.stringify(accountingIds))):[]),
+  ...(group?fundingMembers.map(member=>database.prepare('DELETE FROM backend_write_guards WHERE id=?').bind(`${token}-${member}`)):[]),
   database.prepare('DELETE FROM backend_write_guards WHERE id=?').bind(token),
  ]);}catch(error){if(String(error).includes('CHECK constraint failed'))throw conflict();throw error;}
  const saved=await database.prepare('SELECT channel,reference_id FROM payment_funding_claims WHERE owner=? AND plan_id=? AND item_id=? AND revision=? AND member_id=?')
@@ -105,6 +117,7 @@ export async function commitFinancialEffect(database:D1Database,input:FinancialE
   }
   if(input.markPaid&&event.status==='confirmed'){
    const paid=input.markPaid,item=trip.items.find(i=>i.id===event.itemId);
+   if(item&&item.revision===paid.revision&&item.merchantFunding?.payerId===paid.memberId&&item.price===paid.amount&&equalMoneyMaps(item.shares,event.shares)&&Object.keys(event.contributions).length===1&&event.contributions[paid.memberId]===paid.amount){for(const member of item.participants)if(!item.paid.includes(member)){item.paid.push(member);changed=true;}if(item.status==='awaiting-payment'){item.status='scheduled';changed=true;}}
    if(item&&item.revision===paid.revision&&item.participants.includes(paid.memberId)&&(item.collection?.due[paid.memberId]??item.shares[paid.memberId])===paid.amount){
     const contributed=purchaseEvents(trip,item.id).filter(e=>e.kind!=='settlement'&&e.status==='confirmed').reduce((sum,e)=>sum+(e.shares[paid.memberId]??0),0);
     if(contributed>=item.shares[paid.memberId]&&!item.paid.includes(paid.memberId)){item.paid.push(paid.memberId);changed=true;}

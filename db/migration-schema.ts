@@ -596,6 +596,7 @@ export const t_receipt_objects=sqliteTable("receipt_objects",{
  lease_token:text("lease_token"),
  lease_until:integer("lease_until").notNull().default(0),
  deleted_at:text("deleted_at"),
+ source_sha256:text("source_sha256"),
 },table=>[
  index("receipt_objects_cleanup").on(table.status,table.created,table.lease_until),
 ]);
@@ -725,3 +726,7 @@ export const t_external_recovery_resolutions=sqliteTable('external_recovery_reso
 export const t_external_recovery_approvals=sqliteTable('external_recovery_approvals',{
  resolution_id:text('resolution_id').notNull().references(()=>t_external_recovery_resolutions.id),member_id:text('member_id').notNull(),approved_at:text('approved_at').notNull(),
 },table=>[primaryKey({columns:[table.resolution_id,table.member_id]})]);
+
+export * from './notification-delivery-schema';
+export * from './ops-schema';
+export * from './frontend-schema';

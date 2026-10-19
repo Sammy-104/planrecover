@@ -4,6 +4,7 @@ import { allocate, type Item, type MoneyEvent, type State } from './model.ts';
 import { planCurrency } from './money.ts';
 import { hasMerchantCheckout } from './merchant-scope.ts';
 import { dataTripId, providerCents, requireCaptureLedgerMatch, verifiedOrderCapture, type PaymentOperation, type ProviderOrder } from './payment-guards.ts';
+import {savedMerchantFunding,equalMoneyMaps} from './merchant-funding.ts';
 import { relatedCaptureId, type ProviderRefund } from './paypal-webhooks.ts';
 import { PlanRepository } from './plan-repository.ts';
 import { mergeSharedTrip, sharedTripView } from './trip-sharing.ts';
@@ -291,7 +292,9 @@ export class RecoveryService {
     const result:CaptureAllocation[]=[];const seenMembers=new Set<string>(),seenCaptures=new Set<string>();
     for(const operation of operations) {
       if(!operation.provider_id)throw captureMismatch();
-      if(item.collection){const approved=await this.database.prepare('SELECT snapshot FROM approval_revisions WHERE owner=? AND plan_id=? AND item_id=? AND revision=?').bind(scope.owner,scope.planId,item.id,operation.revision).first<{snapshot:string}>();const facts=approved?JSON.parse(approved.snapshot):null;
+      const group=savedMerchantFunding(operation);
+      if(group){const approved=await this.database.prepare('SELECT snapshot FROM approval_revisions WHERE owner=? AND plan_id=? AND item_id=? AND revision=?').bind(scope.owner,scope.planId,item.id,operation.revision).first<{snapshot:string}>();const facts=approved?JSON.parse(approved.snapshot):null;if(!facts||facts.merchantFunding?.payerId!==operation.member||facts.price!==group.amount||!equalMoneyMaps(facts.shares,group.shares)||operation.revision!==funding.revision||seenMembers.has(operation.member))throw captureMismatch();}
+      else if(item.collection){const approved=await this.database.prepare('SELECT snapshot FROM approval_revisions WHERE owner=? AND plan_id=? AND item_id=? AND revision=?').bind(scope.owner,scope.planId,item.id,operation.revision).first<{snapshot:string}>();const facts=approved?JSON.parse(approved.snapshot):null;
        if(!facts||operation.amount!==(facts.collection?.due?.[operation.member]??facts.shares?.[operation.member])||!facts.participants.includes(operation.member))throw captureMismatch();
       }else if(operation.revision!==funding.revision||operation.amount!==funding.shares[operation.member]||!funding.participants.includes(operation.member)||seenMembers.has(operation.member))throw captureMismatch();
       let order:ProviderOrder;
@@ -354,7 +357,7 @@ export class RecoveryService {
       if(requested>allocation.amount)throw invalid('A requested refund exceeds the confirmed supplier terms.');allocation.amount=requested;
     }
     const dependents=current.state.items.filter(candidate=>candidate.status!=='cancelled'&&candidate.depends.includes(item.id));
-    if(item.funding)for(const allocation of allocations)allocation.costShares=allocate(allocation.amount,item.participants,'weight',item.shares,item.participants);
+    if(item.funding||item.merchantFunding)for(const allocation of allocations)allocation.costShares=allocate(allocation.amount,item.participants,'weight',item.shares,item.participants);
     const required=[...new Set([...item.participants,...(item.funding?.participants??[]),...dependents.flatMap(item=>item.participants)])].sort();
     const id=crypto.randomUUID(),invoiceRefunds:NonNullable<ProposalBody['invoiceRefunds']>=[];
     const invoices=await this.database.prepare('SELECT id,member_id,paid FROM plan_invoices WHERE owner=? AND plan_id=? AND item_id=? AND paid>0').bind(scope.owner,scope.planId,item.id).all<{id:string;member_id:string;paid:number}>(),invoiceFees=await this.fundingFees(scope,item,policy);

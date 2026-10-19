@@ -1,4 +1,5 @@
 import type { Item, MoneyEvent, State } from './model.ts';
+import {freezeMerchantFunding,captureShares,equalMoneyMaps} from './merchant-funding.ts';
 
 /** The existing fictional merchant adapter quotes and settles in CAD only. */
 export const PAYPAL_CURRENCY = 'CAD';
@@ -41,7 +42,9 @@ export function approvedCheckoutAmount(trip: Pick<State, 'plan'>, item: Item | u
       amounts.some(([id, amount]) => !item.participants.includes(id) || !Number.isSafeInteger(amount) || amount < 0) ||
       amounts.reduce((sum, [, amount]) => sum + amount, 0) !== item.price)
     throw Error('Approved shares must match the exact quoted total.');
-  const amount = item.collection?.due[actor] ?? item.shares[actor];
+  const group=freezeMerchantFunding(item);
+  if(group&&group.payerId!==actor)throw Error('Only the approved designated payer can fund this whole-group booking.');
+  const amount = group?.amount??item.collection?.due[actor] ?? item.shares[actor];
   if(item.collection&&(!Number.isSafeInteger(amount)||amount<0||amount>item.shares[actor]))throw Error('Review the credited deposit and remaining balance.');
   if (!Number.isSafeInteger(amount) || amount <= 0) throw Error('A positive approved share is required for checkout.');
   return amount;
@@ -75,8 +78,8 @@ export function verifiedOrderCapture(op: PaymentOperation, data: ProviderOrder) 
 
 export function requireCaptureLedgerMatch(operation: PaymentOperation, event: MoneyEvent) {
   if (event.itemId !== operation.item_id || event.kind !== 'expense' || event.mode !== 'sandbox' || event.status !== 'confirmed' ||
-      event.amount !== operation.amount || Object.keys(event.shares).length !== 1 || Object.keys(event.contributions).length !== 1 ||
-      event.shares[operation.member] !== operation.amount || event.contributions[operation.member] !== operation.amount)
+      event.amount !== operation.amount || !equalMoneyMaps(event.shares,captureShares(operation)) || Object.keys(event.contributions).length !== 1 ||
+      event.contributions[operation.member] !== operation.amount)
     throw Error('The existing capture ledger needs merchant review.');
 }
 
@@ -97,8 +100,9 @@ export function approvedFullRefund(trip: PaymentTrip, event: MoneyEvent) {
       !demoMembers.every(id => item.participants.includes(id) && item.shares[id] === 9000))
     throw Error('The cancelled booking changed. Review a new refund allocation.');
   const payer = Object.keys(event.contributions);
-  if (payer.length !== 1 || !demoMembers.includes(payer[0]) || event.amount !== 9000 ||
-      event.contributions[payer[0]] !== event.amount || event.shares[payer[0]] !== event.amount || Object.keys(event.shares).length !== 1)
+  const group=event.amount===36000&&demoMembers.every(id=>event.shares[id]===9000)&&Object.keys(event.shares).length===demoMembers.length;
+  if (payer.length !== 1 || !demoMembers.includes(payer[0]) || !group&&event.amount !== 9000 ||
+      event.contributions[payer[0]] !== event.amount || !group&&(event.shares[payer[0]] !== event.amount || Object.keys(event.shares).length !== 1))
     throw Error('The capture does not match the approved demo hike share.');
   const proposal = trip.proposals.find(p => {
     if (p.kind !== 'recovery' || p.status !== 'executed' || p.revision !== 1 || p.itemId ||

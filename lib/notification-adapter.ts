@@ -5,6 +5,8 @@ import {BackendError,conflict,forbidden} from './backend-errors.ts';
 import {PlanRepository} from './plan-repository.ts';
 import type {Identity} from './people.ts';
 import {sesEmailConfig,sendSesEmail,sesDigest,SesEmailError,type SesEmailConfig} from './ses-email.ts';
+import {emailDestinationSuppressed} from './ses-delivery-events.ts';
+import {webPushConfig,runWebPushReminderJobs} from './web-push.ts';
 export const destinationRequest=z.object({channel:z.enum(['email','push']),destination:z.string().trim().min(1).max(2000),version:z.number().int().nonnegative(),confirm:z.literal(true)}).strict();
 export async function saveNotificationDestination(database:D1Database,planId:string,identity:Identity,input:z.infer<typeof destinationRequest>,verifiedEmail?:string|null){
  const record=await new PlanRepository(database).getPlan(planId,identity);if(!['owner','editor'].includes(record.role))throw forbidden();
@@ -34,7 +36,8 @@ async function deliverSesReminder(database:D1Database,config:SesEmailConfig|null
  if(!attempts.results.length&&job.attempts>0)throw new SesEmailError('uncertain',false,'ses-prior-provider-attempt-needs-review');
  if(attempts.results.some(row=>!['rejected','cancelled'].includes(row.status)||row.status==='rejected'&&savedJson(row.response).retryable!==true))throw new SesEmailError('uncertain',false,'ses-manual-review-required');
  if(attempts.results.length>=3)throw new SesEmailError('uncertain',false,'ses-retry-limit');
- const id=base+'-'+(attempts.results.length+1),request=JSON.stringify({jobId:job.id,fingerprint,destinationVersion:dest.version,destinationHash:await sesDigest(dest.destination),region:config.region,fromHash:await sesDigest(config.fromEmail)});
+ if(await emailDestinationSuppressed(database,owner,dest.destination,now))throw new SesEmailError('not-sent',false,'ses-recipient-suppressed');
+ const id=base+'-'+(attempts.results.length+1),request=JSON.stringify({jobId:job.id,fingerprint,destinationVersion:dest.version,destinationHash:await sesDigest(dest.destination.trim().toLowerCase()),region:config.region,fromHash:await sesDigest(config.fromEmail)});
  const eligibility=`status='processing' AND lease_token=? AND lease_until>? AND ${deliveryFence} AND ${reminderOptIn} AND EXISTS(SELECT 1 FROM notification_destinations d WHERE d.owner=reminder_jobs.owner AND d.plan_id=reminder_jobs.plan_id AND d.member_id=reminder_jobs.member_id AND d.channel='email' AND d.version=? AND d.destination=? AND d.confirmed_at<>'')`;
  const reserved=await database.prepare(`INSERT OR IGNORE INTO adapter_operations(id,owner,plan_id,member_id,provider,kind,request,status,lease_token,lease_until,created,updated)
  SELECT ?,owner,plan_id,member_id,'aws-ses','send-email',?,'sending',?,?,?,? FROM reminder_jobs WHERE id=? AND owner=? AND channel='email' AND ${eligibility}`)
@@ -42,7 +45,7 @@ async function deliverSesReminder(database:D1Database,config:SesEmailConfig|null
  if(!reserved.meta.changes)throw new SesEmailError('not-sent',false,'ses-source-changed');
  let receivedMessageId:string|undefined;
  try{
-  const result=await sendSesEmail(config,{destination:dest.destination,title:job.title,text:job.body,attemptId:id},{fetch:options.fetch,now:new Date(now),beforeSend:async()=>!!await database.prepare(`SELECT id FROM reminder_jobs WHERE id=? AND owner=? AND ${eligibility} AND EXISTS(SELECT 1 FROM adapter_operations a WHERE a.id=? AND a.status='sending' AND a.lease_token=?)`)
+  const result=await sendSesEmail(config,{destination:dest.destination,title:job.title,text:job.body,attemptId:id},{fetch:options.fetch,now:new Date(now),beforeSend:async()=>!await emailDestinationSuppressed(database,owner,dest.destination,options.now??Date.now())&&!!await database.prepare(`SELECT id FROM reminder_jobs WHERE id=? AND owner=? AND ${eligibility} AND EXISTS(SELECT 1 FROM adapter_operations a WHERE a.id=? AND a.status='sending' AND a.lease_token=?)`)
    .bind(job.id,owner,token,options.now??Date.now(),dest.version,dest.destination,id,token).first()});
   receivedMessageId=result.messageId;
   const saved=await database.prepare("UPDATE adapter_operations SET status='completed',response=?,lease_token=NULL,lease_until=0,updated=? WHERE id=? AND lease_token=? AND status IN ('sending','uncertain')")
@@ -59,19 +62,22 @@ async function deliverSesReminder(database:D1Database,config:SesEmailConfig|null
 
 export async function runExternalReminderJobs(database:D1Database,env:Env,owner:string,options:{now?:number;fetch?:typeof fetch;limit?:number}={}){
  const ses=sesEmailConfig(env);let config:ReturnType<typeof providerConfig>=null;try{config=providerConfig(env,'NOTIFICATION');}catch(error){if(!ses)throw error;}
- if(!ses&&!config)return {attempted:0,accepted:0,failed:0,configured:false};
+ const browserPush=webPushConfig(env),pushResult=browserPush?await runWebPushReminderJobs(database,browserPush,owner,options):null;
+ if(!ses&&!config)return pushResult??{attempted:0,accepted:0,failed:0,configured:false};
  const now=options.now??Date.now(),time=new Date(now).toISOString(),limit=Math.min(10,Math.max(1,options.limit??5));
- const channels=config?"('email','push')":"('email')";
+ const channels=config&&!browserPush?"('email','push')":"('email')";
  const rows=await database.prepare(`SELECT * FROM reminder_jobs WHERE owner=? AND channel IN ${channels} AND due_at<=? AND attempts<5 AND (attempts=0 OR updated<=?) AND (status IN ('scheduled','unavailable') OR status='processing' AND lease_until<=?) ORDER BY due_at,id LIMIT ?`).bind(owner,now,new Date(now-60000).toISOString(),now,limit).all<ExternalJob>();
  let accepted=0,failed=0,manualReview=0;
  for(const job of rows.results){const token=crypto.randomUUID(),claimNow=options.now??Date.now();const claimed=await database.prepare(`UPDATE reminder_jobs SET status='processing',lease_token=?,lease_until=?,attempts=attempts+1,updated=? WHERE id=? AND owner=? AND (status IN ('scheduled','unavailable') OR status='processing' AND lease_until<=?) AND ${deliveryFence} AND ${reminderOptIn} AND ${reminderDestination}`).bind(token,claimNow+30000,new Date(claimNow).toISOString(),job.id,owner,claimNow).run();if(!claimed.meta.changes)continue;
   try{const dest=await database.prepare('SELECT destination,version FROM notification_destinations WHERE owner=? AND plan_id=? AND member_id=? AND channel=?').bind(owner,job.plan_id,job.member_id,job.channel).first<{destination:string;version:number}>();if(!dest)throw conflict();
    const current=await database.prepare(`SELECT id FROM reminder_jobs WHERE id=? AND lease_token=? AND lease_until>? AND ${deliveryFence} AND ${reminderOptIn}`).bind(job.id,token,options.now??Date.now()).first();if(!current)throw conflict();
+   if(job.channel==='email'&&await emailDestinationSuppressed(database,owner,dest.destination,options.now??Date.now()))throw new SesEmailError('not-sent',false,'ses-recipient-suppressed');
    const sesDelivery=job.channel==='email'?await deliverSesReminder(database,ses,owner,job,dest,token,options):null;
+   if(!sesDelivery&&(job.channel==='email'&&env.AWS_SES_ENABLED==='false'||job.channel==='push'&&env.WEB_PUSH_ENABLED==='false'))throw new BackendError('NOTIFICATION_DISABLED','Sending for this notification channel is disabled.',503);
    if(!sesDelivery){if(!config)throw new BackendError('NOTIFICATION_CONFIG','The selected reminder channel is not configured.',503);const key=`${job.id}-${dest.version}`,payload={channel:job.channel,destination:dest.destination,title:job.title,text:job.body,requestId:key};
     const result=z.object({accepted:z.literal(true),requestId:z.string(),deliveryId:z.string().min(1).max(180)}).strict().parse(await providerPost(config,'/deliver',payload,key,options.fetch));if(result.requestId!==key)throw new BackendError('NOTIFICATION_EVIDENCE','Delivery acknowledgment does not match this request.',502);}
    const saved=await database.prepare(`UPDATE reminder_jobs SET status='delivered',delivered=?,lease_token=NULL,lease_until=0,last_error='provider-accepted',updated=? WHERE id=? AND lease_token=? AND lease_until>? AND ${deliveryFence} AND ${reminderOptIn} AND EXISTS(SELECT 1 FROM notification_destinations WHERE owner=? AND plan_id=? AND member_id=? AND channel=? AND version=?)`).bind(time,time,job.id,token,options.now??Date.now(),owner,job.plan_id,job.member_id,job.channel,dest.version).run();if(saved.meta.changes)accepted++;
   }catch(error){failed++;if(error instanceof SesEmailError&&(!error.retryable||error.outcome==='uncertain'))manualReview++;await database.prepare("UPDATE reminder_jobs SET status='unavailable',lease_token=NULL,lease_until=0,last_error=?,updated=? WHERE id=? AND lease_token=?").bind(error instanceof SesEmailError?error.reason:'external-delivery-needs-review',time,job.id,token).run();}
  }
- return {attempted:rows.results.length,accepted,failed,manualReview,configured:true,evidence:'Provider acceptance does not establish inbox or device receipt.'};
+ return {attempted:rows.results.length+(pushResult?.attempted??0),accepted:accepted+(pushResult?.accepted??0),failed:failed+(pushResult?.failed??0),manualReview:manualReview+(pushResult?.manualReview??0),configured:true,evidence:'Provider acceptance does not establish inbox or device receipt.'};
 }

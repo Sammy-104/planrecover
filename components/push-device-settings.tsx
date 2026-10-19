@@ -1,0 +1,19 @@
+'use client';
+import {useEffect,useState} from 'react';
+
+type Device={id:string;version:number;status:string;expires_at:number|null;updated:string};
+type Settings={subscriptions:Device[];enabled:boolean;publicKey:string|null};
+export default function PushDeviceSettings({planId}:{planId:string}){
+ const [settings,setSettings]=useState<Settings|null>(null),[message,setMessage]=useState(''),[busy,setBusy]=useState(false);
+ const path=`/api/plans/${encodeURIComponent(planId)}/me/push-subscriptions`;
+ const load=async()=>{const response=await fetch(path,{cache:'no-store'}),value=await response.json() as Settings&{error?:string};if(!response.ok)throw Error(value.error??'Device settings could not be loaded.');setSettings(value);};
+ useEffect(()=>{setSettings(null);setMessage('');void load().catch(error=>setMessage(error.message));const changed=()=>setMessage('Your browser subscription changed. Register this device again to refresh it.');navigator.serviceWorker?.addEventListener('message',changed);return()=>navigator.serviceWorker?.removeEventListener('message',changed);},[planId]); // eslint-disable-line react-hooks/exhaustive-deps
+ async function enable(){setBusy(true);setMessage('');try{if(!('serviceWorker' in navigator)||!('PushManager' in window)||!('Notification' in window))throw Error('This browser does not support Web Push.');if(!settings?.publicKey)throw Error('The owner must configure Web Push before registering a device.');
+  const permission=await Notification.requestPermission();if(permission!=='granted')throw Error('Notifications were not allowed. Change your browser permission before trying again.');
+  await navigator.serviceWorker.register('/sw.js');const registration=await navigator.serviceWorker.ready,bytes=Uint8Array.from(atob(settings.publicKey.replace(/-/g,'+').replace(/_/g,'/')),character=>character.charCodeAt(0));
+  const subscription=await registration.pushManager.getSubscription()??await registration.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:bytes});
+  const response=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({subscription:{...subscription.toJSON(),expirationTime:subscription.expirationTime??null},confirm:true})}),value=await response.json() as {error?:string};if(!response.ok)throw Error(value.error??'The device could not be registered.');await load();setMessage('Device registered. Enable push in your reminder preferences when sending is available.');
+ }catch(error){setMessage(error instanceof Error?error.message:'The device could not be registered.');}finally{setBusy(false);}}
+ async function remove(id:string){setBusy(true);setMessage('');try{const response=await fetch(path,{method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,confirm:true})}),value=await response.json() as {error?:string};if(!response.ok)throw Error(value.error??'The device could not be removed.');await load();setMessage('Device removed from this plan.');}catch(error){setMessage(error instanceof Error?error.message:'The device could not be removed.');}finally{setBusy(false);}}
+ return <section aria-label="Browser push devices"><h3>Browser notifications</h3><p>{settings?.enabled?'Push sending is enabled. Device registration and your reminder preference are both required.':'Push sending is disabled. Device registration alone does not send notifications.'}</p><button type="button" disabled={busy||!settings?.publicKey} onClick={()=>void enable()}>Register this browser</button>{settings?.subscriptions.map(device=><div key={device.id}><span>{device.status==='active'?'Registered device':device.status==='expired'?'Expired device':'Removed device'} · Updated {new Date(device.updated).toLocaleDateString()}</span>{device.status==='active'&&<button type="button" disabled={busy} onClick={()=>void remove(device.id)}>Remove device</button>}</div>)}<p role="status">{message}</p></section>;
+}

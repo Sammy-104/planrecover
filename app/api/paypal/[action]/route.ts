@@ -9,6 +9,7 @@ import {PlanRepository} from '@/lib/plan-repository';
 import {createPlanCheckout,capturePlanCheckout} from '@/lib/plan-checkout';
 import {claimPaymentFunding,saveProviderRequestIntent,approvedItemSnapshot,commitFinancialEffect} from '@/lib/financial-history';
 import {reserveCaptureRefund,confirmCaptureRefund} from '@/lib/recovery-service';
+import {freezeMerchantFunding} from '@/lib/merchant-funding';
 
 export async function POST(request: Request, { params }: { params: Promise<{ action: string }> }) {
   try {
@@ -56,13 +57,14 @@ export async function POST(request: Request, { params }: { params: Promise<{ act
       requirePaymentActor(state, actor, personId);
       if (item) requireMerchantCheckout(item);
       const amount = approvedCheckoutAmount(state, item, actor, revision);
+      const groupFunding=freezeMerchantFunding(item!),fundingMetadata=groupFunding?{planrecoverFunding:groupFunding}:{};
       const stable = (await hash(`${id}-${state.plan.id}-${item!.id}-${actor}-${item!.revision}`)).slice(0, 38);
       await claimPaymentFunding(db(),{owner:id,planId:state.plan.id!,itemId:item!.id,revision:item!.revision,memberId:actor,channel:'order',referenceId:stable});
       const prior = await db().prepare('SELECT * FROM provider_operations WHERE id = ? AND owner = ? AND kind = ?')
         .bind(stable, id, 'order').first<PaymentOperation>();
       if (prior?.provider_id) return Response.json({ orderId: prior.provider_id });
       await db().prepare('INSERT OR IGNORE INTO provider_operations (id,owner,item_id,member,revision,kind,amount,status,payload) VALUES (?,?,?,?,?,?,?,?,?)')
-        .bind(stable, id, item!.id, actor, item!.revision, 'order', amount, 'creating', JSON.stringify({ planrecoverTripId: state.plan.id, planrecoverCurrency: 'CAD',planrecoverApprovalSnapshot:approvedItemSnapshot(item!) })).run();
+        .bind(stable, id, item!.id, actor, item!.revision, 'order', amount, 'creating', JSON.stringify({ planrecoverTripId: state.plan.id, planrecoverCurrency: 'CAD',planrecoverApprovalSnapshot:approvedItemSnapshot(item!),...fundingMetadata })).run();
       const orderBody={
         intent: 'CAPTURE', purchase_units: [{ reference_id: item!.id, custom_id: stable, description: `PlanRecover demo merchant: ${item!.name} / ${actor}`, amount: { currency_code: 'CAD', value: (amount / 100).toFixed(2) } }],
         payment_source: { paypal: { experience_context: { shipping_preference: 'NO_SHIPPING', user_action: 'PAY_NOW' } } },
@@ -72,7 +74,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ act
       const order = await paypal('/v2/checkout/orders','POST',orderBody,requestKey);
       if (typeof order.id !== 'string' || !order.id) throw Error('PayPal returned no order ID.');
       await db().prepare('UPDATE provider_operations SET provider_id = ?, status = ?, payload = ? WHERE id = ? AND owner = ?')
-        .bind(order.id, 'created', JSON.stringify({ ...order, planrecoverTripId: state.plan.id, planrecoverCurrency: 'CAD',planrecoverApprovalSnapshot:approvedItemSnapshot(item!) }), stable, id).run();
+        .bind(order.id, 'created', JSON.stringify({ ...order, planrecoverTripId: state.plan.id, planrecoverCurrency: 'CAD',planrecoverApprovalSnapshot:approvedItemSnapshot(item!),...fundingMetadata }), stable, id).run();
       return Response.json({ orderId: order.id });
     }
 

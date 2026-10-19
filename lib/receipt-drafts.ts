@@ -152,6 +152,7 @@ export class ReceiptDraftRepository {
     const members = planMembers(state).map(person => person.id);
     if (!members.includes(receipt.payer)) throw new BackendError('INVALID_RECEIPT', 'Choose the person who paid.');
     splitReceipt(receipt, members, currency);
+    if(receipt.contributions!==undefined&&(Object.entries(receipt.contributions).some(([id,amount])=>!members.includes(id)||!Number.isSafeInteger(amount)||amount<0)||Object.values(receipt.contributions).reduce((a,b)=>a+b,0)!==receipt.total||receipt.total>0&&!(receipt.contributions[receipt.payer]>0)))throw new BackendError('INVALID_RECEIPT','Verify every original payer contribution and the exact tender total.');
     const statement = this.database.prepare(`UPDATE receipt_drafts SET status='reviewed',reviewed_receipt=?,version=version+1,updated=?
       WHERE id=? AND owner=? AND plan_id=? AND version=? AND ${accessCondition(true)} AND NOT EXISTS(SELECT 1 FROM receipt_objects o WHERE o.file_key=receipt_drafts.file_key AND o.status<>'ready')`)
       .bind(JSON.stringify(receipt), new Date().toISOString(), id, scope.owner, scope.planId, version,
@@ -179,7 +180,7 @@ function sourceLineDetails(item:ReceiptExtraction['items'][number],sameCurrency:
 function receiptFingerprint(receipt: Receipt) {
   return JSON.stringify({merchant: receipt.merchant, date: receipt.date,
     rows: receipt.rows.map(row => ({id: row.id, name: row.name, amount: row.amount, claims: [...row.claims].sort(),allocation:row.allocation,values:row.values,quantityMilli:row.quantityMilli,unitPrice:row.unitPrice,lineDiscount:row.lineDiscount})),
-    tax: receipt.tax, tip: receipt.tip, discount: receipt.discount, total: receipt.total, payer: receipt.payer,
+    tax: receipt.tax, tip: receipt.tip, discount: receipt.discount, total: receipt.total, payer: receipt.payer,contributions:receipt.contributions?Object.fromEntries(Object.entries(receipt.contributions).sort(([a],[b])=>a.localeCompare(b))):undefined,
     paymentConfirmed: receipt.paymentConfirmed, tipRule: receipt.tipRule, fileKey: receipt.fileKey, linkedItemId: receipt.linkedItemId,recording:receipt.recording,correctionReason:receipt.correctionReason});
 }
 /** Old receipts without a persisted draft retain their existing review flow. */

@@ -3,7 +3,7 @@
 This tool checks a candidate restore bundle. It does **not** export a hosted
 database, restore a database, upload objects, contact providers or certify that a
 hosted restoration has succeeded. Use an isolated, consistent SQLite export and
-an exported directory of receipt object bytes. Never point it at the running
+an exported directory of receipt and document object bytes. Never point it at the running
 application's local SQLite file.
 
 Run with Node 24 from this repository:
@@ -29,13 +29,15 @@ pass. Expected schema construction occurs only in a separate in-memory database.
 ## Receipt byte layout and independent inventory
 
 Preserve R2 object keys exactly under the supplied `objects` directory. Application
-keys are a SHA-256 workspace-owner prefix followed by a receipt UUID, with no
+keys are a SHA-256 workspace-owner prefix followed by a receipt UUID, or `documents/` and a document UUID, with no
 filename extension:
 
 ```text
 objects/
   <64 lowercase hexadecimal characters>/
     12345678-1234-4234-8234-123456789abc
+    documents/
+      12345678-1234-4234-8234-123456789abd
 ```
 
 The independent JSON inventory has this format:
@@ -62,8 +64,8 @@ the original export in independently controlled storage. Computing a new
 inventory from an already damaged restore candidate cannot establish that its
 content matches the original.
 
-The current database stores receipt size and MIME type, but no independent
-cryptographic digest of each source. Without `--manifest`, the verifier checks
+Documents and new receipts retain original upload digests, checked against restored content and lifecycle metadata. Migration0022 leaves legacy receipt digests NULL instead of inventing an original baseline; once set, digests are immutable. Legacy receipts retain size/MIME but no original
+cryptographic digest. Without `--manifest`, the verifier checks
 presence, saved draft size and recognizable file signature, computes candidate
 digests and emits `NO_INDEPENDENT_OBJECT_HASHES`. Such checks cannot detect every
 same-size substitution. Use `--require-manifest` for the stronger acceptance gate.
@@ -84,7 +86,7 @@ File signature checks do not fully decode an image or parse a PDF.
   completion without distinct allocated proof fails verification and needs
   bounded authorized reconciliation in the isolated restored environment.
 - Receipt references from saved active, archived and retained deleted plans,
-  drafts and lifecycle rows. Required bytes, owner/plan scope, size, file
+  drafts, documents and lifecycle rows. Required bytes, owner/plan scope, size, file
   signature and independent hashes are checked. Missing sources, retired source
   bytes unexpectedly present, malformed keys and links/junctions fail. Extra
   unreferenced files are warnings for operator review.
@@ -95,7 +97,7 @@ byte inventory. It contains private identifiers and financial references. Store
 it with the backup's access controls. It contains no object contents, provider
 credentials or access tokens.
 
-Pending provider operations and staged/deleting receipt sources are warnings
+Pending provider operations and staged/deleting receipt/document sources are warnings
 because a consistent backup may legitimately contain unfinished work. Keep
 provider mutations disabled in the isolated environment. Resolve their original
 canonical identities and authorization before enabling any processing. The
@@ -116,6 +118,7 @@ independent hashes:
 
 ```powershell
 node scripts/test.mjs backend-backup-verification
+node scripts/test.mjs backend-backup-bundle backend-backup-objects
 ```
 
 They cover input byte/timestamp preservation, machine-readable CLI exits,
@@ -123,3 +126,5 @@ missing/mismatched objects, same-size tampering, broken foreign keys, missing
 migrations/triggers, financial inconsistency, duplicate provider effects,
 corruption, sidecars and intentionally retired source bytes. These fixtures are
 offline checks, not hosted backup or restoration evidence.
+
+The [capture/retention/rehearsal CLI](BACKUP_OPERATIONS.md) creates a local bundle from explicit provider exports, preserves hashes at capture time, resumes bounded batches and verifies a separate isolated copy. It does not create provider exports or activate restored runtimes.

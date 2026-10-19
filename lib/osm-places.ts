@@ -1,3 +1,4 @@
+import {placeQuery,matchesPlaceQuery} from './place-query.ts';
 import {PLACE_DETAILS_VERSION,type CityPlace} from './cities.ts';
 import {CITY_CATALOG_LIMIT,activityWords,discoveryCollections,discoveryCollection,discoveryTopic,discoveryTopics,foldPlaceName,matchesPlaceName,type DiscoveryTopic} from './discovery.ts';
 import {validPoint} from './itinerary-map.ts';
@@ -61,15 +62,17 @@ const labels:Record<string,string>={place_of_worship:'Temple or place of worship
 export function osmQuery(point:{lat:number;lon:number},search='',city='',radiusKm=20){
  const radius=searchRadius(radiusKm);
  if(!validPoint({latitude:point.lat,longitude:point.lon}))throw Error('Invalid city location.');
- const collection=discoveryCollection(search,city),topic=discoveryTopic(search,city),words=topic?[]:activityWords(search,city).slice(0,6);
+ const intent=placeQuery(search,city),collection=discoveryCollection(intent.subject,city),topic=intent.topic??discoveryTopic(intent.subject,city),words=intent.descriptive?[]:activityWords(intent.subject,city).slice(0,6);
  // Quote and escape regex characters; user input never becomes an Overpass operator.
+ const cuisine=intent.cuisine?'[\"cuisine\"~'+JSON.stringify('(^|;)'+intent.cuisine.toLowerCase()+'(;|$)')+',i]':'';
+ const fee=intent.free?'[\"fee\"=\"no\"]':'';
  const named=words.map(word=>`[~"^(name(:[a-zA-Z_-]+)?|alt_name(:[a-zA-Z_-]+)?|official_name|short_name)$"~${JSON.stringify(word.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'))},i]`).join('');
  const groups=collection?[{selectors:nicheRules[collection.id].selectors,limit:500}]:[
   ...(topic?[topic]:discoveryTopics).map(key=>({selectors:selectors[key],limit:topic||words.length?500:250})),
   ...discoveryCollections.filter(c=>!topic||c.topic===topic).map(c=>({selectors:nicheRules[c.id].selectors,limit:topic||words.length?200:90}))
  ];
  // Separate venue types AND geometry types: a large node list must not hide museums mapped as buildings.
- return '[out:json][timeout:18][maxsize:67108864];'+groups.map(group=>`(${group.selectors.map(selector=>`nwr(around:${radius*1000},${point.lat},${point.lon})["name"]["access"!~"^(private|no)$"]${selector}${named};`).join('')})->.venues;node.venues;out center body ${group.limit};way.venues;out center body ${group.limit};relation.venues;out center body ${Math.min(group.limit,100)};`).join('');
+ return '[out:json][timeout:18][maxsize:67108864];'+groups.map(group=>`(${group.selectors.map(selector=>`nwr(around:${radius*1000},${point.lat},${point.lon})["name"]["access"!~"^(private|no)$"]${selector}${named}${cuisine}${fee};`).join('')})->.venues;node.venues;out center body ${group.limit};way.venues;out center body ${group.limit};relation.venues;out center body ${Math.min(group.limit,100)};`).join('');
 }
 /** Named visitor destinations only; coordinates come from the mapped venue, never the city. */
 export async function osmPlaces(city:string,point:{lat:number;lon:number},search:string,request:typeof fetch,radiusKm=20):Promise<CityPlace[]>{
@@ -81,18 +84,19 @@ export async function osmPlaces(city:string,point:{lat:number;lon:number},search
   }catch{ /* Try one alternate global instance; Wikipedia and saved places remain independent. */ }
  }
  if(!body)throw Error('Local place search is temporarily unavailable.');
- const places:CityPlace[]=[],seen=new Set<string>(),collection=discoveryCollection(search,city),topic=discoveryTopic(search,city),words=activityWords(search,city);
+ const intent=placeQuery(search,city),places:CityPlace[]=[],seen=new Set<string>(),collection=discoveryCollection(intent.subject,city),topic=intent.topic??discoveryTopic(intent.subject,city),words=activityWords(intent.subject,city);
  for(const element of body.elements??[]){
   const t=element.tags??{},name=t['name:en']||t.name,location={lat:element.lat??element.center?.lat,lon:element.lon??element.center?.lon},kind=topics(t);
   if(typeof name!=='string'||name.length>200||!kind.length||!['node','way','relation'].includes(element.type)||!Number.isSafeInteger(element.id)||!validPoint({latitude:location.lat,longitude:location.lon})||km(point,location)>radius+.1||t.access==='private'||t.access==='no'||t.disused==='yes'||t.abandoned==='yes')continue;
   if(topic&&!kind.includes(topic))continue;
   if(collection&&!nicheRules[collection.id].matches(t))continue;
-  if(search&&!topic&&![name,...Object.entries(t).filter(([key])=>/^(name(:[a-zA-Z_-]+)?|alt_name(:[a-zA-Z_-]+)?|official_name|short_name)$/.test(key)).flatMap(([,value])=>String(value).split(';'))].some(value=>matchesPlaceName(value,words)))continue;
+  if(search&&!intent.descriptive&&![name,...Object.entries(t).filter(([key])=>/^(name(:[a-zA-Z_-]+)?|alt_name(:[a-zA-Z_-]+)?|official_name|short_name)$/.test(key)).flatMap(([,value])=>String(value).split(';'))].some(value=>matchesPlaceName(value,words)))continue;
+  if(!matchesPlaceQuery({name,tags:kind,...mappedPlaceInfo(t,'')},{...intent,topic:undefined},city))continue;
   const id=`osm-${element.type}-${element.id}`;if(seen.has(id))continue;seen.add(id);
   const value=t.tourism||t.historic||t.leisure||t.amenity||t.natural||t.shop,label=nicheRules.climbing.matches(t)?'Climbing venue':t.leisure==='pitch'&&nicheRules.skating.matches(t)?'Skating venue':labels[value]??String(value).replaceAll('_',' ').replace(/^./,c=>c.toUpperCase());
   const address=[t['addr:housenumber'],t['addr:street'],t['addr:suburb']].filter(v=>typeof v==='string').join(' '),sourceUrl=`https://www.openstreetmap.org/${element.type}/${element.id}`;
   const wiki=typeof t.wikipedia==='string'&&t.wikipedia.startsWith('en:')?t.wikipedia.slice(3):undefined;
-  places.push({id,name,category:kind.includes('Food')?'Meal':kind.includes('Shopping')?'Practical stop':'Activity',area:address||`In and around ${city} · ${km(point,location).toFixed(1)} km from centre`,description:`${label}${t.cuisine?` · ${String(t.cuisine).replaceAll(';',', ')}`:''}${address?` at ${address}`:''}. Check the source for visit details.`,sourceUrl,sourceLabel:'OpenStreetMap · mapped place',tags:[...kind,...discoveryCollections.filter(c=>nicheRules[c.id].matches(t)).map(c=>c.label),...(kind.includes('Museums')||kind.includes('Landmarks')?['Culture']:[])],latitude:location.lat,longitude:location.lon,locationVersion:PLACE_DETAILS_VERSION,placeDetailsVersion:PLACE_DETAILS_VERSION,locationSourceUrl:sourceUrl,...mappedPlaceInfo(t,sourceUrl),...(element.type!=='node'?{locationPrecision:.002}:{}),...(wiki?{wikiTitle:wiki}:{}),...(/^Q\d+$/.test(t.wikidata??'')?{wikidataId:t.wikidata}:{}),photoStatus:'unavailable'});
+  places.push({id,name,category:kind.includes('Food')?'Meal':kind.includes('Shopping')?'Practical stop':'Activity',area:address||`In and around ${city} · ${km(point,location).toFixed(1)} km from centre`,description:`${label}${t.cuisine?` · ${String(t.cuisine).replaceAll(';',', ')}`:''}${address?` at ${address}`:''}. Check the source for visit details.`,sourceUrl,sourceLabel:'OpenStreetMap · mapped place',tags:[...kind,...discoveryCollections.filter(c=>nicheRules[c.id].matches(t)).map(c=>c.label),...(kind.includes('Museums')||kind.includes('Landmarks')?['Culture']:[])],latitude:location.lat,longitude:location.lon,locationVersion:PLACE_DETAILS_VERSION,placeDetailsVersion:PLACE_DETAILS_VERSION,locationSourceUrl:sourceUrl,...mappedPlaceInfo(t,sourceUrl),...(element.type!=='node'?{locationPrecision:.002}:{}),...(wiki?{wikiTitle:wiki}:{}),...(/^Q\d+$/.test(t.wikidata??'')?{wikidataId:t.wikidata}:{}),commonsFile:typeof t.wikimedia_commons==='string'&&/^File:.+\.(?:jpe?g|png|webp)$/i.test(t.wikimedia_commons)?t.wikimedia_commons.slice(5):undefined,photoStatus:'unavailable'});
  }
  return places;
 }
@@ -101,7 +105,7 @@ export function mergePlaces(groups:CityPlace[][],limit=CITY_CATALOG_LIMIT){
  for(const place of groups.flat()){
   const name=foldPlaceName(place.name);
   const existing=(place.wikidataId?byEntity.get(place.wikidataId):undefined)??(place.wikiTitle?byTitle.get(place.wikiTitle):undefined)??byName.get(name)?.find(p=>typeof p.latitude==='number'&&typeof p.longitude==='number'&&typeof place.latitude==='number'&&typeof place.longitude==='number'&&km({lat:p.latitude,lon:p.longitude},{lat:place.latitude,lon:place.longitude})<.3);
-  if(existing){existing.tags=[...new Set([...existing.tags,...place.tags])];for(const field of ['address','officialWebsite','openingHours','indoor','detailsSourceUrl','detailsCheckedAt','wikiTitle','wikidataId','popularityCoverage','popularitySourceUrl'] as const)if(existing[field]===undefined&&place[field]!==undefined)(existing as any)[field]=place[field];if(!existing.imageUrl&&place.imageUrl)Object.assign(existing,{imageUrl:place.imageUrl,imagePageUrl:place.imagePageUrl,imageCredit:place.imageCredit,imageLicense:place.imageLicense,imageLicenseUrl:place.imageLicenseUrl,photoStatus:place.photoStatus});continue;}
+  if(existing){existing.tags=[...new Set([...existing.tags,...place.tags])];for(const field of ['address','officialWebsite','openingHours','indoor','cuisines','admission','listedPrice','commonsFile','detailsSourceUrl','detailsCheckedAt','wikiTitle','wikidataId','popularityCoverage','popularitySourceUrl'] as const)if(existing[field]===undefined&&place[field]!==undefined)(existing as any)[field]=place[field];if(!existing.imageUrl&&place.imageUrl)Object.assign(existing,{imageUrl:place.imageUrl,imagePageUrl:place.imagePageUrl,imageCredit:place.imageCredit,imageLicense:place.imageLicense,imageLicenseUrl:place.imageLicenseUrl,photoStatus:place.photoStatus});continue;}
   const added={...place};result.push(added);if(added.wikidataId)byEntity.set(added.wikidataId,added);if(added.wikiTitle)byTitle.set(added.wikiTitle,added);byName.set(name,[...(byName.get(name)??[]),added]);
  }
  // Mix specific collections and broad topics, including on the first page of browsing.

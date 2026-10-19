@@ -8,11 +8,12 @@ export function backgroundHealth(background:Background,now=Date.now()){
  return {status:alerts.length?'attention-required':'healthy',alerts,overdueThresholdMinutes:90};
 }
 export async function planOperationsQueue(database:D1Database,owner:string,planId:string){
- const [payments,invoices,adapters,reminders]=await Promise.all([
+ const [payments,invoices,adapters,reminders,healthAlerts]=await Promise.all([
   database.prepare("SELECT id,kind,status,provider_id FROM provider_operations WHERE owner=? AND json_extract(payload,'$.planrecoverTripId')=? AND status IN ('creating','creation-uncertain','capture-uncertain','refund-pending','manual-review') ORDER BY id LIMIT 50").bind(owner,planId).all(),
   database.prepare("SELECT id,COALESCE(lifecycle_status,status) status FROM plan_invoices WHERE owner=? AND plan_id=? AND COALESCE(lifecycle_status,status) IN ('needs-review','creating','sending') ORDER BY updated LIMIT 50").bind(owner,planId).all(),
   database.prepare("SELECT id,provider,kind,status FROM adapter_operations WHERE owner=? AND plan_id=? AND status IN ('uncertain','failed','manual-review') ORDER BY updated LIMIT 50").bind(owner,planId).all(),
   database.prepare("SELECT channel,COUNT(*) count FROM reminder_jobs WHERE owner=? AND plan_id=? AND status='unavailable' GROUP BY channel").bind(owner,planId).all(),
+  database.prepare("SELECT code,event,status,attempts,last_outcome,created,updated FROM ops_health_alerts WHERE owner=? AND status IN ('uncertain','rejected','cancelled') ORDER BY updated DESC,id DESC LIMIT 30").bind(owner).all(),
  ]);
- return {payments:payments.results,invoices:invoices.results,adapters:adapters.results,unavailableReminderChannels:reminders.results};
+ return {payments:payments.results,invoices:invoices.results,adapters:adapters.results,unavailableReminderChannels:reminders.results,ownerHealthAlerts:healthAlerts.results};
 }

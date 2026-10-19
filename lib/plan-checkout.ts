@@ -6,6 +6,7 @@ import {approvedCheckoutAmount,requirePaymentActor,verifiedOrderCapture,verifyUn
 import {requireMerchantCheckout} from './merchant-scope.ts';
 import {claimPaymentFunding,saveProviderRequestIntent,sha256,approvedItemSnapshot} from './financial-history.ts';
 import {purchaseEvents} from './receipt-accounting.ts';
+import {freezeMerchantFunding,savedMerchantFunding} from './merchant-funding.ts';
 type Provider=(path:string,method?:string,body?:unknown,key?:string)=>Promise<any>;
 type Dependencies={database:D1Database;provider:Provider;reconcileCapture:(owner:string,operation:PaymentOperation,order:ProviderOrder)=>Promise<unknown>};
 
@@ -16,7 +17,8 @@ export async function createPlanCheckout(record:PlanRecord,identity:Identity,inp
  if(!item)throw new BackendError('ITEM_NOT_FOUND','This payment item is unavailable.',404);
  requireMerchantCheckout(item);requirePaymentActor(record.state,identity.id,identity.id);
  const amount=approvedCheckoutAmount(record.state,item,identity.id,input.revision),planId=record.state.plan.id!;
- if(purchaseEvents(record.state,item.id).filter(event=>event.kind!=='settlement'&&event.status==='confirmed').reduce((sum,event)=>sum+(event.shares[identity.id]??0),0)>=(item.shares[identity.id]??0))
+ const funding=freezeMerchantFunding(item);
+ if(funding?purchaseEvents(record.state,item.id).some(event=>event.kind!=='settlement'&&event.status==='confirmed'):purchaseEvents(record.state,item.id).filter(event=>event.kind!=='settlement'&&event.status==='confirmed').reduce((sum,event)=>sum+(event.shares[identity.id]??0),0)>=(item.shares[identity.id]??0))
   throw new BackendError('PAYMENT_ALREADY_RECORDED','Your payment is already recorded for this purchase.',409);
  const id=(await sha256(`${record.owner}-${planId}-${item.id}-${identity.id}-${item.revision}`)).slice(0,38);
  await claimPaymentFunding(dependencies.database,{owner:record.owner,planId,itemId:item.id,revision:item.revision,memberId:identity.id,channel:'order',referenceId:id,version:record.version});
@@ -28,7 +30,7 @@ export async function createPlanCheckout(record:PlanRecord,identity:Identity,inp
   amount:{currency_code:'CAD',value:(amount/100).toFixed(2)},
  }],payment_source:{paypal:{experience_context:{shipping_preference:'NO_SHIPPING',user_action:'PAY_NOW'}}}};
  await dependencies.database.prepare('INSERT OR IGNORE INTO provider_operations(id,owner,item_id,member,revision,kind,amount,status,payload) VALUES (?,?,?,?,?,?,?, ?,?)')
-  .bind(id,record.owner,item.id,identity.id,item.revision,'order',amount,'creating',JSON.stringify({planrecoverTripId:planId,planrecoverCurrency:'CAD',planrecoverApprovalSnapshot:approvedItemSnapshot(item)})).run();
+  .bind(id,record.owner,item.id,identity.id,item.revision,'order',amount,'creating',JSON.stringify({planrecoverTripId:planId,planrecoverCurrency:'CAD',planrecoverApprovalSnapshot:approvedItemSnapshot(item),...(funding?{planrecoverFunding:funding}:{})})).run();
  await saveProviderRequestIntent(dependencies.database,{operationId:id,owner:record.owner,planId,path:'/v2/checkout/orders',body,requestKey:key});
  const fresh=await new PlanRepository(dependencies.database).getPlan(planId,identity);
  if(fresh.version!==record.version||!['owner','editor'].includes(fresh.role)){
@@ -37,7 +39,7 @@ export async function createPlanCheckout(record:PlanRecord,identity:Identity,inp
  const order=await dependencies.provider('/v2/checkout/orders','POST',body,key);
  if(typeof order.id!=='string'||!/^[A-Z0-9]{1,36}$/.test(order.id))throw new BackendError('PROVIDER_ORDER_INVALID','PayPal returned no valid sandbox order.',502);
  await dependencies.database.prepare('UPDATE provider_operations SET provider_id=?,status=?,payload=? WHERE id=? AND owner=? AND provider_id IS NULL')
-  .bind(order.id,'created',JSON.stringify({...order,planrecoverTripId:planId,planrecoverCurrency:'CAD',planrecoverApprovalSnapshot:approvedItemSnapshot(item)}),id,record.owner).run();
+  .bind(order.id,'created',JSON.stringify({...order,planrecoverTripId:planId,planrecoverCurrency:'CAD',planrecoverApprovalSnapshot:approvedItemSnapshot(item),...(funding?{planrecoverFunding:funding}:{})}),id,record.owner).run();
  const saved=await dependencies.database.prepare('SELECT provider_id FROM provider_operations WHERE id=? AND owner=?').bind(id,record.owner).first<{provider_id:string}>();
  if(saved?.provider_id!==order.id)throw new BackendError('PROVIDER_ORDER_CONFLICT','The saved order needs reconciliation.',409);
  return {orderId:order.id,operationId:id};
@@ -57,7 +59,7 @@ export async function capturePlanCheckout(record:PlanRecord,identity:Identity,or
   if(op.status==='manual-review')throw new BackendError('ORDER_REVIEW_REQUIRED','This recovered checkout needs merchant review before payment.',409);
   if(op.status==='cancelled')throw new BackendError('CHECKOUT_CLOSED','This checkout is closed. Review the revised share.',409);
   verifyUncapturedOrder(op,order);
-  if(purchaseEvents(record.state,item.id).filter(event=>event.kind!=='settlement'&&event.status==='confirmed').reduce((sum,event)=>sum+(event.shares[identity.id]??0),0)>=(item.shares[identity.id]??0))throw new BackendError('PAYMENT_ALREADY_RECORDED','Your payment is already recorded for this purchase.',409);
+  if(savedMerchantFunding(op)?purchaseEvents(record.state,item.id).some(event=>event.kind!=='settlement'&&event.status==='confirmed'):purchaseEvents(record.state,item.id).filter(event=>event.kind!=='settlement'&&event.status==='confirmed').reduce((sum,event)=>sum+(event.shares[identity.id]??0),0)>=(item.shares[identity.id]??0))throw new BackendError('PAYMENT_ALREADY_RECORDED','Your payment is already recorded for this purchase.',409);
   if(approvedCheckoutAmount(record.state,item,identity.id,op.revision)!==op.amount)throw conflict();
   const snapshot=JSON.parse(op.payload??'{}').planrecoverApprovalSnapshot;
   if(snapshot&&snapshot!==approvedItemSnapshot(item))throw new BackendError('APPROVAL_CHANGED','Review the current payment terms.',409);

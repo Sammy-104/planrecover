@@ -1,4 +1,4 @@
-export const DISCOVERY_VERSION=4;
+export const DISCOVERY_VERSION=5;
 export const CITY_CATALOG_LIMIT=1800;
 export const discoveryTopics=['Landmarks','Museums','Outdoors','Food','Shopping','Entertainment'] as const;
 export type DiscoveryTopic=typeof discoveryTopics[number];

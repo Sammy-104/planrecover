@@ -161,6 +161,7 @@ export class PlanInvoiceRepository {
    if(prior.provider_id)return this.completeCreate(scope,prior);
   }
   const item=state.items.find(value=>value.id===input.itemId);
+  if(item?.merchantFunding)throw new BackendError('GROUP_FUNDING_CHANNEL','Use the designated payer’s whole-group checkout. Per-member invoices cannot collect this booking again.',409);
   const amount=approvedCheckoutAmount(state,item,input.memberId,input.revision);
   if(!item)throw unavailable();requireMerchantCheckout(item);
   if(!state.people?.some(person=>person.id===input.memberId&&['owner','editor'].includes(person.role)))

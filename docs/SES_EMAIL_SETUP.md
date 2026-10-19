@@ -1,6 +1,6 @@
 # Amazon SES reminder email
 
-The SES v2 adapter sends existing opted-in reminder jobs as plain-text emails. It is disabled until the owner explicitly sets `AWS_SES_ENABLED=true`. No setup or readiness endpoint sends email. Existing in-app reminders continue independently; push delivery still uses the optional generic notification adapter.
+The SES v2 adapter sends opted-in reminder jobs as plain-text emails. It stays disabled until the owner sets `AWS_SES_ENABLED=true`. No setup/readiness endpoint sends email. Existing in-app reminders continue independently. Native Web Push and signed SES outcomes/suppression are documented in [notification delivery setup](NOTIFICATION_DELIVERY_SETUP.md).
 
 ## Private runtime configuration
 
@@ -44,7 +44,7 @@ The adapter does not create identities, request production access, change IAM, o
 
 Verify the sender in the selected region. In the SES sandbox, recipients must also be verified; AWS applies regional sandbox sending limits. Production access changes recipient eligibility but still requires a verified sender. This implementation has not requested or verified production access. See [SES sandbox requirements](https://docs.aws.amazon.com/ses/latest/dg/request-production-access.html).
 
-The owner-selected email-only sender identity was created in Canada Central during follow-up setup, and its Verified status was read back after the owner completed the verification link. Application sending remains disabled and no sending credential was created. A consumer email address such as Gmail does not grant control of that provider's domain authentication; SES warns that DMARC can quarantine or reject such mail. Prefer an owned, authenticated sending domain for broader use. See [SES DMARC guidance](https://docs.aws.amazon.com/ses/latest/dg/send-email-authentication-dmarc.html).
+The owner-selected Canada Central email identity is Verified. Authorized follow-up setup created a dedicated credential restricted to the selected sender/recipient and region, stored in private runtime settings revision5. Application sending remains disabled and controlled delivery is unverified. A consumer Gmail address does not grant domain authentication control; SES warns DMARC can quarantine/reject mail. Prefer an owned authenticated domain for broader use. See [SES DMARC guidance](https://docs.aws.amazon.com/ses/latest/dg/send-email-authentication-dmarc.html).
 
 Each plan participant must opt into email reminders in private planning preferences and confirm their signed-in account email. Saving an arbitrary third-party email is rejected. Every send rechecks current membership, plan/source revisions, opt-in, destination version and the active job lease, including a final check after signing.
 
@@ -58,10 +58,10 @@ Timeouts, lost responses, unknown errors, malformed acknowledgments and interrup
 
 Only a parsed, documented `429 TooManyRequestsException` can automatically retry: at least one minute later, with a separate durable record, up to three attempts for the same reminder. Other definite rejections require configuration or content review. Credential rotation, opt-out, plan deletion or destination changes never erase past acceptance evidence.
 
-SES acceptance does not prove delivery to an inbox. Configure and monitor bounce/complaint handling before broader use; this batch does not add an SNS event receiver or claim delivery from acceptance. See [SES event notifications](https://docs.aws.amazon.com/ses/latest/dg/monitor-sending-activity-using-notifications.html).
+SES acceptance does not prove inbox delivery. Signed SNS event ingestion, dedupe and recipient suppression are now implemented with disabled defaults; topic/configuration-set wiring, private ingress and genuine signed delivery/bounce/complaint evidence remain activation steps. No receiver GET auto-confirms SNS or sends email. Follow [notification delivery setup](NOTIFICATION_DELIVERY_SETUP.md) and [SES event notifications](https://docs.aws.amazon.com/ses/latest/dg/monitor-sending-activity-using-notifications.html).
 
 ## Verification
 
 Run `node scripts/test.mjs backend-ses-email backend-adapters backend-reminders backend-expansion-routes` and `npm run typecheck`. Tests use real migrated SQLite and injected fixture HTTP, including independent SigV4 calculation, concurrent and expired leases, accepted replay, ambiguous results, storage interruptions, recipient ownership and opt-out/deletion fences.
 
-Live sender verification, restricted credential setup, regional sandbox/production status, an authorized recipient acceptance test, event handling and unattended-run evidence remain deployment work. Tests did not call live AWS or send application email. Follow-up console preparation requested AWS's sender-verification message only.
+Sender verification and restricted private credentials are complete; sending stays false. Regional sandbox eligibility, controlled recipient acceptance, event ingress and unattended-run evidence remain deployment work. Fixture tests call no AWS and send no email. Follow-up setup is configuration evidence, not delivery evidence.

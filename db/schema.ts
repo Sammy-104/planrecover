@@ -7,6 +7,9 @@ export * from './planning-schema';
 export * from './jobs-schema';
 export * from './evidence-schema';
 export * from './expansion-schema';
+export * from './notification-delivery-schema';
+export * from './ops-schema';
+export * from './frontend-schema';
 export const workspaces=sqliteTable('workspaces',{owner:text('owner').primaryKey(),body:text('body').notNull(),version:integer('version').notNull().default(0),updated:text('updated').notNull()});
 export const providerOperations=sqliteTable('provider_operations',{id:text('id').primaryKey(),owner:text('owner').notNull(),itemId:text('item_id').notNull(),member:text('member').notNull(),revision:integer('revision').notNull(),kind:text('kind').notNull(),amount:integer('amount').notNull(),providerId:text('provider_id'),status:text('status').notNull(),payload:text('payload')},table=>[index('idx_provider_operations_provider_kind').on(table.providerId,table.kind)]);
 export const webhookEvents=sqliteTable('webhook_events',{

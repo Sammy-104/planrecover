@@ -65,6 +65,7 @@ export function compilePlanChange(state:State,input:Extract<z.infer<typeof chang
    const collected=recorded.amount;
    if(!finalized&&collected>0&&collected<item.price)warnings.push(`${item.name}: retain the collected deposit and approve only the remaining balance under the new allocation. Resolve existing invoices first.`);
    item.participants=remaining;item.shares=allocate(item.price,remaining,'equal',{},allowed);item.required=[...remaining];item.allocation='equal';item.values={};
+   if(!collected&&item.merchantFunding?.payerId===input.memberId){delete item.merchantFunding;warnings.push(`${item.name}: the unpaid designated payer is leaving; remaining members must approve individual funding or choose a new whole-group payer.`);}
    for(const member of new Set([...Object.keys(priorShares),...remaining]))perMember[member]=(perMember[member]??0)+(item.shares[member]??0)-(priorShares[member]??0);
   }else if(input.option!=='keep')item.status='cancelled';
  }
@@ -86,10 +87,10 @@ export function compilePlanChange(state:State,input:Extract<z.infer<typeof chang
   const recorded=recordedCost(state,item.id),events=recorded.events,paid=recorded.amount,p=policies[item.id],priorShares=hasFinalizedReceiptPurchase(state,item.id)?recorded.shares:item.shares;cancelledFuture+=paid+projectedRemaining(state,item);cancelledRecorded+=paid;
   for(const member of required)perMember[member]=(perMember[member]??0)-(priorShares[member]??0)+events.reduce((n,e)=>n+(e.shares[member]??0),0);
   if(paid>0){if(!p||p.cutoff&&Date.parse(p.cutoff)<=now){expectedRefund=null;for(const member of new Set([...item.participants,...(item.funding?.participants??[])]))impacts[member].expectedRefund=null;warnings.push(`${item.name}: current confirmed cancellation terms are required.`);}else{
-   const funding=item.funding??item,fees=allocate(p.cancellationFeeUnits,funding.participants,'weight',funding.shares,allowed);
-   for(const member of funding.participants){const captured=events.filter(e=>e.kind==='expense').reduce((n,e)=>n+(e.contributions[member]??0),0),refunded=-events.filter(e=>e.kind==='refund').reduce((n,e)=>n+(e.contributions[member]??0),0),amount=Math.max(0,Math.floor(captured*p.refundableBps/10000)-(fees[member]??0)-refunded);if(expectedRefund!==null)expectedRefund+=amount;
+   const funded=events.filter(e=>e.kind==='expense'||e.kind==='adjustment'),payerIds=[...new Set(funded.flatMap(e=>Object.keys(e.contributions)))],tenders=Object.fromEntries(payerIds.map(member=>[member,funded.reduce((n,e)=>n+(e.contributions[member]??0),0)]).filter(([,amount])=>Number(amount)>0)),originalPayers=Object.keys(tenders),fees=allocate(p.cancellationFeeUnits,originalPayers,'weight',tenders,allowed);
+   for(const member of originalPayers){const captured=tenders[member],refunded=-events.filter(e=>e.kind==='refund').reduce((n,e)=>n+(e.contributions[member]??0),0),amount=Math.max(0,Math.floor(captured*p.refundableBps/10000)-(fees[member]??0)-refunded);if(expectedRefund!==null)expectedRefund+=amount;
     if(impacts[member].expectedRefund!==null)impacts[member].expectedRefund!+=amount;
-    const costShares=item.funding?allocate(amount,item.participants,'weight',item.shares,allowed):{[member]:amount};for(const [id,n]of Object.entries(costShares))perMember[id]=(perMember[id]??0)-n;
+    const costIds=Object.keys(priorShares).filter(id=>priorShares[id]>0),costShares=costIds.length?allocate(amount,costIds,'weight',priorShares,allowed):{};for(const [id,n]of Object.entries(costShares))perMember[id]=(perMember[id]??0)-n;
    }
   }}
  }

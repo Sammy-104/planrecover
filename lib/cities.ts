@@ -1,5 +1,5 @@
-export type PlacePhoto={imageUrl?:string;imagePageUrl?:string;imageCredit?:string;imageLicense?:string;imageLicenseUrl?:string;photoStatus?:'available'|'unavailable'|'retry'};
-export const PLACE_DETAILS_VERSION=2;
+export type PlacePhoto={imageUrl?:string;imagePageUrl?:string;imageCredit?:string;imageLicense?:string;imageLicenseUrl?:string;photoStatus?:'available'|'unavailable'|'retry';commonsFile?:string};
+export const PLACE_DETAILS_VERSION=3;
 export type PlaceLocation=import('./place-info.ts').PlaceInfo&{latitude?:number;longitude?:number;wikiTitle?:string;wikidataId?:string;locationVersion?:number;locationSourceUrl?:string;locationPrecision?:number;placeLookupManual?:boolean;placeDetailsVersion?:number};
 export type CityPlace=PlacePhoto&PlaceLocation&import('./place-popularity.ts').PlacePopularity&{id:string;name:string;category:string;area:string;description:string;sourceUrl:string;sourceLabel:string;tags:string[]};
 export type CityProfile={key:string;name:string;country:string;timezone:string;aliases:string[];places:CityPlace[]};

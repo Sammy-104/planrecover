@@ -19,5 +19,5 @@ export async function POST(request:Request){try{
  if(!body||typeof body!=='object'||Array.isArray(body)||Object.keys(body).length)throw new BackendError('INVALID_JOB_REQUEST','The runner selects only saved workspace records.');
  const raw=Number((env as unknown as Record<string,string>).JOB_BATCH_SIZE??25);
  const maxOwners=Number.isInteger(raw)&&raw>=1&&raw<=100?raw:25;
- return Response.json(await runScheduledOwners(db(),runSavedOwnerJobs,{maxOwners}),{headers:{'Cache-Control':'private, no-store'}});
+ return Response.json(await runScheduledOwners(db(),owner=>runSavedOwnerJobs(owner,'scheduled'),{maxOwners}),{headers:{'Cache-Control':'private, no-store'}});
 }catch(error){return apiError(error);}}

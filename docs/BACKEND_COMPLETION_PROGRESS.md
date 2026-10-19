@@ -1,26 +1,29 @@
-# Backend completion work started October 17, 2026
+# Backend completion progress — October 18, 2026
 
-This is the first implementation batch following the audit corrections. It keeps the current private Worker/D1/R2 application, financial approval boundaries and existing paused schedule. It does not activate paid services or send application reminder email. The owner-selected SES sender identity was created separately and its Verified status was read back after the owner completed address verification.
+The latest batch implements work that does not require Bedrock and carries forward the audited backend into the supplied frontend. The private Worker/D1/R2 architecture, immutable financial records and explicit approvals remain authoritative. External delivery, a public relay, the existing paused schedule and provider mutations are not activated by this source update.
 
-| Area | Delivered in this batch | Still required |
+| Area | Implemented and fixture-testable | External completion still required |
 | --- | --- | --- |
-| Bedrock | Owner-only readiness GET; explicit synthetic inference POST with durable results, replay protection, shared limits and an operator view in `/flows`. AWS sign-in and quota inspection completed. | Applied Nova Lite quota remains 0. The 400,000 TPM request is Case Opened and AWS says it is under review. No repeat inference was attempted; a bounded check and feature-level verification follow resolution. |
-| Email | Direct SES v2 signing and opted-in reminder delivery with durable attempt evidence. Uncertain outcomes block automatic resends, including after switching providers. The user-selected email identity is Verified in Canada Central. | Restricted sending credentials, authorized acceptance test, bounce/complaint monitoring and inbox evidence. Disabled by default. |
-| Backups | Read-only exported-database and receipt-byte verification CLI; schema, immutable financial facts, canonical provider identities, allocation caps and object hashes checked. | Actual hosted database/object exports, retention/storage selection and an isolated hosted restoration drill. |
-| PayPal ingress | Existing narrow relay prepared for the authenticated Cloudflare account; bundle passed `wrangler deploy --dry-run`. | Approved public receiver and private service-credential placement, registration on the same sandbox PayPal app, genuine signed callback and duplicate replay evidence. |
-| Background jobs | Existing bounded writer and health/review queue retained; readiness shows its observed run separately from unattended schedule verification. | Explicit resumption of the existing paused hourly automation and an unattended completion record. |
+| Bedrock | Existing owner-only GET and explicit bounded synthetic diagnostic remain available; this batch makes no model calls. | Last observed applied Nova Lite quota was0; AWS request400,000 TPM was under review. Recheck access before inference and feature acceptance. |
+| SES email | Durable SES sends, signed delivery outcomes, recipient suppression and owner-scoped evidence. Authorized follow-up setup created restricted private credentials; sender Verified; sending false. | Controlled self-recipient send, signed callback configuration, delivery outcome and unattended evidence. |
+| Browser push | Scoped subscriptions, VAPID configuration, encrypted delivery, device expiry/revocation and durable attempt outcomes. Disabled by default. | Dedicated private VAPID setup, consented subscription and real device delivery. |
+| Operations alerts | Durable deduped issue/recovery episodes, coarse receiver contract, bounded known-rejection retries and manual review after ambiguity. Disabled by default. | Approved receiver, private settings and observed external on-call delivery/recovery. |
+| Background jobs | Bounded batches plus persisted manual/scheduled origin and completion evidence; external phases retain disabled gates. | Explicit resumption/readback of the existing hourly schedule and actual unattended completion. |
+| Backups | Standalone exported SQLite plus all referenced receipt/document bytes, captured hashes, bounded resumable copying, verification, dry-run retention and isolated local rehearsal. Object readback respects owner and document visibility. | Host-supported consistent export/restore access, separate private storage, independent manifests, schedule and measured hosted recovery drill. |
+| PayPal ingress | Existing narrow relay preparation, app signature verification, durable inbox and duplicate handling retained. | Approved public receiver/service access, same-app PayPal registration and genuine signed delivery/replay. |
+| Frontend data | Existing durable plan services plus document lifecycle/hash/access, ideas, presence and private preferences support the supplied experience. | Hosted browser/multi-user acceptance evidence is recorded in the final publication report. |
+| Supplier | Existing validated sandbox bridge and retained booking/status workflow. | Select a real supplier and authorize/configure its integration; fixtures do not establish availability or booking. |
+| Optional funding/receipts | Whole-group CAD sandbox designated payer with exact affected-member approvals/full-group funding claims; split receipt cash contributions with contributor consent and immutable identities/corrections. | Final fixture validation and controlled hosted acceptance; no live PayPal production activation. |
 
-The new tests use real migrated SQLite and injected provider fixtures. No live AWS inference, SES send, PayPal financial action, supplier booking or restore was performed by this batch. A configured secret, accepted email, local restore bundle or manual job run is not proof of the corresponding full hosted journey.
+Readiness inspection makes no external provider request. Scoped observations distinguish canonical payment facts, processed signed callbacks, SES acceptance/signed outcomes, push provider results, scheduled completion and alert receiver acceptance. `fullWorkflowVerification` stays unverified until a full hosted acceptance journey exists. Configuration and activation are separate: valid retained SES credentials can be configured while sending is disabled.
 
-The authenticated account menu was read on October 17: Free plan, USD 120.00 credits remaining, access ending April 14, 2027 or on credit exhaustion. No paid upgrade, dedicated IP, delivery-manager add-on or new sending credential was created. Recheck account eligibility and applicable credits before any future live test. An email-only consumer-address identity can encounter DMARC delivery restrictions; use an owned authenticated domain before broader delivery.
-
-Validation: all 56 application suites passed with live network disabled. Final targeted SES, adapter, reminder, expansion-route and readiness suites also pass after the provider-switch safeguards, along with TypeScript and the production Worker build. Local browser QA verified independent email/push status, read-only refresh, and a disabled provider-call control when unconfigured.
-
-Supplier-specific inventory/booking, browser push subscriptions and device delivery, external operations-alert delivery, one-member group merchant funding, split-tender new receipts and physical Alexa+/Fire TV integrations remain outside this batch.
+Tests use real migrated SQLite and injected providers with live network disabled. The final delivery report records aggregate suite counts, typecheck/build, exact source and deployment; earlier56-suite results describe the prior batch. No local test establishes inbox reading, real device receipt, hosted recovery or AWS approval.
 
 ## Operator entry points
 
-- Open `/flows`, select an owned personal plan, and expand **Connected services and recent checks**. Refreshing readiness is read-only; **Run one Bedrock check** is an explicit provider call.
-- Follow [SES email setup](SES_EMAIL_SETUP.md) before enabling `AWS_SES_ENABLED`. No readiness or setup control sends a test email.
-- Run `node scripts/verify-backup.mjs --help` for the offline verifier; follow [backup verification](BACKUP_VERIFICATION.md) for independent inventory requirements.
-- Use only `services/paypal-relay` for the optional public receiver. Its ignored online configuration contains the account selection but no service secret. Keep the main application private.
+- `/flows`: select an owned personal plan and inspect **Connected services and recent checks**. Refresh is read-only; Bedrock checking remains an explicit inference action.
+- `GET /api/plans/:planId/backup-objects`: paginated accessible receipt/document inventory; `?key=` returns scoped bytes with SHA-256. This is not a complete hosted backup and excludes other members' private documents.
+- `node scripts/manage-backups.mjs --help`: capture already exported data, resume, rehearse a separate local copy, or inspect/apply retention. Follow [backup operations](BACKUP_OPERATIONS.md).
+- Follow [SES setup](SES_EMAIL_SETUP.md) and [operations](OPERATIONS_RUNBOOK.md) before activation. No GET/readiness control sends email, push or alerts.
+
+Historical account observation on October17: Free plan, USD120.00 credits, access ending April14,2027 or on credit exhaustion. This is not a current quota/billing guarantee. Recheck eligibility and costs before live tests. An email-only consumer sender can encounter DMARC restrictions; use an owned authenticated domain for broader delivery.

@@ -1,9 +1,10 @@
+import {itemDay,dayCity} from './city-stays.ts';
 import type {State,Suggestion,Item} from './model.ts';
 import {validPoint,itineraryStops} from './itinerary-map.ts';
 import {localDateTime,tripDays,zonedStart} from './trip-time.ts';
 import type {TravelMode} from './schedule.ts';
-export const dayPalette=['#315be8','#a63eb3','#087f78','#bc5413','#6949bf','#b32550','#236887','#66701b'];
-export function stopDay(item:Pick<Item,'start'>,zone:string){return localDateTime(item.start,zone).slice(0,10);}
+export const dayPalette=['#6d4aff','#d95847','#9b7617','#735b91','#20847b','#ad456c','#4c6cac','#78614c'];
+export function stopDay(item:Pick<Item,'start'> & Partial<Pick<Item,'timezone'>>,zone:string){return itemDay(item,zone);}
 export function dayColor(state:State,day:string){return dayPalette[Math.max(0,tripDays(state.plan.start,state.plan.end).indexOf(day))%dayPalette.length];}
 export function directionsUrl(items:Pick<Item,'latitude'|'longitude'>[],mode:TravelMode='walk'){
  if(!items.length||items.length>(mode==='transit'?2:5)||!items.every(validPoint))return undefined;
@@ -20,9 +21,9 @@ export function dayDirections(state:State,day:string,mode:TravelMode='walk'){
 export function suggestedVisit(state:State,idea:Suggestion,day:string){
  if(!idea.flexible)return idea.start;
  if(!tripDays(state.plan.start,state.plan.end).includes(day))throw Error('Choose a day within this plan.');
- let instant=Date.parse(zonedStart(`${day}T10:00`,state.plan.timezone));
- const items=itineraryStops(state).filter(s=>stopDay(s.item,state.plan.timezone)===day).map(s=>s.item);
+ let instant=Date.parse(zonedStart(`${day}T10:00`,idea.timezone??dayCity(state,day).timezone));
+ const items=itineraryStops(state).filter(s=>stopDay(s.item,idea.timezone??dayCity(state,day).timezone)===day).map(s=>s.item);
  for(const item of items){const start=Date.parse(item.start),end=start+item.duration*60000;if(instant+idea.duration*60000<=start-15*60000)break;if(instant<end+15*60000)instant=end+15*60000;}
- if(stopDay({start:new Date(instant+idea.duration*60000-1).toISOString()},state.plan.timezone)!==day)throw Error('This day is full. Choose another day or adjust an activity.');
- return zonedStart(localDateTime(new Date(instant).toISOString(),state.plan.timezone),state.plan.timezone);
+ if(stopDay({start:new Date(instant+idea.duration*60000-1).toISOString()},idea.timezone??dayCity(state,day).timezone)!==day)throw Error('This day is full. Choose another day or adjust an activity.');
+ return zonedStart(localDateTime(new Date(instant).toISOString(),idea.timezone??dayCity(state,day).timezone),idea.timezone??dayCity(state,day).timezone);
 }

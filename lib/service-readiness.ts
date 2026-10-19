@@ -6,6 +6,8 @@ import {providerConfig} from './http-adapters.ts';
 import {sesEmailConfig} from './ses-email.ts';
 import {PlanRepository} from './plan-repository.ts';
 import type {Identity} from './people.ts';
+import {healthAlertConfiguration} from './health-alerts.ts';
+import {webPushConfig} from './web-push.ts';
 
 type Settings=Record<string,unknown>;
 type Configuration='configured'|'missing'|'invalid';
@@ -35,10 +37,13 @@ function genericConfiguration(settings:Settings,prefix:string):Configuration{
  try{return providerConfig(settings,prefix)?'configured':'missing';}catch{return 'invalid';}
 }
 function notificationConfiguration(settings:Settings){
- const push=genericConfiguration(settings,'NOTIFICATION');let email=push,emailProvider='generic';
- if(settings.AWS_SES_ENABLED==='true'){emailProvider='amazon-ses';try{email=sesEmailConfig(settings)?'configured':'missing';}catch{email='invalid';}}
+ let push=genericConfiguration(settings,'NOTIFICATION'),pushProvider='generic',pushEnabled=push==='configured';let email=push,emailProvider='generic',emailEnabled=push==='configured';
+ const pushPresent=['WEB_PUSH_PUBLIC_KEY','WEB_PUSH_PRIVATE_KEY','WEB_PUSH_SUBJECT'].some(key=>present(settings[key]));
+ if(settings.WEB_PUSH_ENABLED==='true'||settings.WEB_PUSH_ENABLED==='false'||pushPresent){pushProvider='web-push';pushEnabled=settings.WEB_PUSH_ENABLED==='true';try{push=!pushPresent&&!pushEnabled?'missing':webPushConfig({...settings,WEB_PUSH_ENABLED:'true'})?'configured':'missing';}catch{push='invalid';}}
+ const sesPresent=['AWS_SES_REGION','AWS_SES_FROM_EMAIL','AWS_SES_ACCESS_KEY_ID','AWS_SES_SECRET_ACCESS_KEY'].some(key=>present(settings[key]));
+ if(settings.AWS_SES_ENABLED==='true'||settings.AWS_SES_ENABLED==='false'||sesPresent){emailProvider='amazon-ses';emailEnabled=settings.AWS_SES_ENABLED==='true';try{email=!sesPresent&&!emailEnabled?'missing':sesEmailConfig({...settings,AWS_SES_ENABLED:'true'})?'configured':'missing';}catch{email='invalid';}}
  const configuration:Configuration=email==='invalid'||push==='invalid'?'invalid':email==='configured'||push==='configured'?'configured':'missing';
- return {configuration,email,push,emailProvider};
+ return {configuration,email,push,emailProvider,emailEnabled,pushProvider,pushEnabled};
 }
 async function configHash(config:BedrockConfig){
  const bytes=new TextEncoder().encode(JSON.stringify({key:config.apiKey,region:config.region,model:config.modelId,profile:!!config.requireApplicationProfile}));
@@ -61,6 +66,29 @@ function failureOutcome(error:unknown):typeof outcomes[number]{
  return 'unavailable';
 }
 
+/** These are server-retained facts with deliberately narrow scopes. A saved
+ * acceptance, signed callback or manual job does not certify a whole journey,
+ * delivery to a person, current credentials, or an unattended schedule. */
+export async function observedServiceEvidence(database:D1Database,owner:string,planId:string){
+ const [payments,webhooks,supplier,email,push,scheduled,alerts,emailOutcomes,pushAttempts]=await Promise.all([
+  database.prepare("SELECT COUNT(*) count,MAX(created) observed_at FROM financial_events WHERE owner=? AND plan_id=? AND provider='paypal-sandbox'").bind(owner,planId).first<{count:number;observed_at:string|null}>(),
+  database.prepare(`SELECT COUNT(*) count,MAX(w.processed) observed_at FROM webhook_events w WHERE w.status='processed' AND (
+   EXISTS(SELECT 1 FROM financial_events f WHERE f.owner=? AND f.plan_id=? AND f.provider='paypal-sandbox' AND f.provider_id=json_extract(w.body,'$.resource.id')) OR
+   EXISTS(SELECT 1 FROM provider_operations p WHERE p.owner=? AND json_extract(p.payload,'$.planrecoverTripId')=? AND p.provider_id=json_extract(w.body,'$.resource.id')) OR
+   EXISTS(SELECT 1 FROM plan_invoices i WHERE i.owner=? AND i.plan_id=? AND i.provider_id=json_extract(w.body,'$.resource.id')))`)
+   .bind(owner,planId,owner,planId,owner,planId).first<{count:number;observed_at:string|null}>(),
+  database.prepare("SELECT COUNT(*) count,MAX(updated) observed_at FROM adapter_operations WHERE owner=? AND plan_id=? AND provider='supplier' AND status='completed'").bind(owner,planId).first<{count:number;observed_at:string|null}>(),
+  database.prepare("SELECT COUNT(*) count,MAX(updated) observed_at FROM adapter_operations WHERE owner=? AND plan_id=? AND provider='aws-ses' AND kind='send-email' AND status='completed' AND json_extract(response,'$.accepted')=1").bind(owner,planId).first<{count:number;observed_at:string|null}>(),
+  database.prepare("SELECT COUNT(*) count,MAX(delivered) observed_at FROM reminder_jobs WHERE owner=? AND plan_id=? AND channel='push' AND status='delivered'").bind(owner,planId).first<{count:number;observed_at:string|null}>(),
+  database.prepare("SELECT COUNT(*) count,MAX(completed_at) observed_at FROM background_run_evidence WHERE owner=? AND source='scheduled' AND status='completed' AND completed_at IS NOT NULL").bind(owner).first<{count:number;observed_at:string|null}>(),
+  database.prepare("SELECT COUNT(*) count,MAX(accepted_at) observed_at FROM ops_health_alerts WHERE owner=? AND status='accepted'").bind(owner).first<{count:number;observed_at:string|null}>(),
+  database.prepare('SELECT event_type,COUNT(*) count,MAX(occurred_at) observed_at FROM notification_delivery_events WHERE owner=? AND plan_id=? GROUP BY event_type').bind(owner,planId).all<{event_type:string;count:number;observed_at:string}>(),
+  database.prepare('SELECT status,COUNT(*) count,MAX(updated) observed_at FROM web_push_attempts WHERE job_id IN (SELECT id FROM reminder_jobs WHERE owner=? AND plan_id=?) GROUP BY status').bind(owner,planId).all<{status:string;count:number;observed_at:string}>(),
+ ]);
+ const view=(row:{count:number;observed_at:string|null}|null,scope:string)=>({scope,status:row?.count?'observed':'unobserved',count:row?.count??0,lastObservedAt:row?.observed_at?stamp(row.observed_at):null,fullWorkflowVerification:'unverified'});
+ return {paypal:view(payments,'canonical-sandbox-financial-effect'),webhook:view(webhooks,'signed-processed-callback-matching-plan-provider-reference'),supplier:view(supplier,'validated-bridge-response'),email:{...view(email,'ses-provider-acceptance-only'),outcomes:emailOutcomes.results.filter(row=>['delivery','bounce','complaint','delay','rejected'].includes(row.event_type)).map(row=>({event:row.event_type,count:row.count,lastObservedAt:stamp(row.observed_at)})),deliveryScope:'Signed SES events describe provider delivery outcomes, not whether a person read an email.'},push:{...view(push,'push-provider-acceptance-only'),attempts:pushAttempts.results.filter(row=>['sending','accepted','rejected','expired','uncertain','cancelled'].includes(row.status)).map(row=>({status:row.status,count:row.count,lastObservedAt:stamp(row.observed_at)}))},runner:view(scheduled,'recorded-scheduled-run-completion'),alerts:view(alerts,'alert-receiver-acceptance-only')};
+}
+
 /** Configuration inspection never contacts providers. Stored checks contain only
  * coarse outcomes/counts; configuration fingerprints and credentials stay private. */
 export class ServiceReadinessService{
@@ -70,9 +98,10 @@ export class ServiceReadinessService{
  private ownOperation(row:Operation,owner:string,planId:string){if(row.owner!==owner||row.plan_id!==planId||row.provider!==provider||row.kind!==kind)throw conflict();return row;}
  async inspect(planId:string,identity:Identity,settings:Settings,now=Date.now()){
   const record=await this.owner(planId,identity),bedrock=bedrockSettings(settings),paypal=paypalConfiguration(settings);
-  const [last,background]=await Promise.all([
+  const [last,background,evidence]=await Promise.all([
    this.database.prepare('SELECT * FROM adapter_operations WHERE owner=? AND plan_id=? AND provider=? AND kind=? ORDER BY created DESC,id DESC LIMIT 1').bind(record.owner,planId,provider,kind).first<Operation>(),
    this.database.prepare('SELECT status,last_started,last_completed FROM background_job_runs WHERE owner=?').bind(record.owner).first<{status:string;last_started:string|null;last_completed:string|null}>(),
+   observedServiceEvidence(this.database,record.owner,planId),
   ]);
   const check=last?checkView(last,now):null;let verification:Verification='unverified';
   if(last&&bedrock.config){let fingerprint='';try{fingerprint=JSON.parse(last.request).configurationHash;}catch{}
@@ -84,10 +113,10 @@ export class ServiceReadinessService{
   const notifications=notificationConfiguration(settings);
   return {configurationIsNotVerification:true,services:{
    bedrock:{configuration:bedrock.configuration,verification,lastCheck:check,scope:'synthetic-json-converse',fullWorkflowVerification:'unverified'},
-   paypal:{...basic(paypal),scope:'sandbox-credentials'},webhook:{...basic(webhook),scope:'signed-ingress'},
-   runner:{...basic(runner),scope:'unattended-schedule',lastObservedRun:background?{status:['idle','running','completed','retry'].includes(background.status)?background.status:'unknown',startedAt:background.last_started?stamp(background.last_started):null,completedAt:background.last_completed?stamp(background.last_completed):null}:null},
-   supplier:{...basic(supplier),scope:'supplier-bridge'},notifications:{...basic(notifications.configuration),scope:'provider-delivery',channels:{email:{...basic(notifications.email),provider:notifications.emailProvider},push:basic(notifications.push)}},
-  }};
+   paypal:{...basic(paypal),scope:'sandbox-credentials',evidence:evidence.paypal},webhook:{...basic(webhook),scope:'signed-ingress',evidence:evidence.webhook},
+   runner:{...basic(runner),scope:'unattended-schedule',evidence:evidence.runner,lastObservedRun:background?{status:['idle','running','completed','retry'].includes(background.status)?background.status:'unknown',startedAt:background.last_started?stamp(background.last_started):null,completedAt:background.last_completed?stamp(background.last_completed):null}:null},
+   supplier:{...basic(supplier),scope:'supplier-bridge',evidence:evidence.supplier},notifications:{...basic(notifications.configuration),scope:'provider-delivery',channels:{email:{...basic(notifications.email),provider:notifications.emailProvider,enabled:notifications.emailEnabled,activation:notifications.emailEnabled?'enabled':'disabled',evidence:evidence.email},push:{...basic(notifications.push),provider:notifications.pushProvider,enabled:notifications.pushEnabled,activation:notifications.pushEnabled?'enabled':'disabled',evidence:evidence.push}}},
+  },operations:{healthAlerts:{configuration:healthAlertConfiguration(settings).configuration,enabled:healthAlertConfiguration(settings).enabled,evidence:evidence.alerts},backup:{verification:'unverified',scope:'hosted-export-and-restore',offlineToolsAvailable:true}},evidenceIsScopedObservation:true};
  }
  async checkBedrock(planId:string,identity:Identity,settings:Settings,input:CheckInput,dependencies:{fetch?:typeof fetch;now?:()=>number}={}){
   const parsed=readinessCheckRequest.safeParse(input);if(!parsed.success)throw new BackendError('READINESS_INPUT','Explicitly confirm one Bedrock check with a new request ID.');

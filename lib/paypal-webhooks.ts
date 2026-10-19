@@ -2,6 +2,7 @@ import { financialTrip, type State } from './model.ts';
 import {commitFinancialEffect} from './financial-history.ts';
 import {confirmCaptureRefund,reconcileRecoveryRefund} from './recovery-service.ts';
 import { providerCents, verifiedOrderCapture, dataTripId, requirePayPalCurrency, requireCaptureLedgerMatch, type PaymentOperation, type ProviderOrder } from './payment-guards.ts';
+import {captureShares,retainedPaymentMetadata,equalMoneyMaps} from './merchant-funding.ts';
 
 export type PayPalWebhookEvent = { id: string; event_type: string; resource: Record<string, unknown>; [key: string]: unknown };
 export class WebhookDeliveryError extends Error {
@@ -174,15 +175,15 @@ async function reconcileRetainedCapture(database: D1Database, operation: Payment
     const item = retained.state.items.find(item => item.id === operation.item_id)!;
     const event={
       id: `paypal-${capture.id}`, itemId: item.id, kind: 'expense', label: `${item.name} · sandbox payment`,
-      shares: { [operation.member]: operation.amount }, contributions: { [operation.member]: operation.amount }, amount: operation.amount,
+      shares: captureShares(operation), contributions: { [operation.member]: operation.amount }, amount: operation.amount,
       status: 'confirmed', evidence: `Server-verified sandbox capture ${capture.id}. Retained deleted plan; booking confirmation is separate.`,
       mode: 'sandbox', created: new Date().toISOString(), providerId: capture.id,
     } as const;
     await commitFinancialEffect(database,{owner:operation.owner,planId:dataTripId(operation)!,event,
-      operation:{id:operation.id,status:'captured',payload:JSON.stringify({...order,planrecoverTripId:dataTripId(operation),planrecoverCurrency:'CAD'})}});
+      operation:{id:operation.id,status:'captured',payload:JSON.stringify({...order,planrecoverTripId:dataTripId(operation),planrecoverCurrency:'CAD',...retainedPaymentMetadata(operation)})}});
   }else{
     await commitFinancialEffect(database,{owner:operation.owner,planId:dataTripId(operation)!,event:existing[0],
-      operation:{id:operation.id,status:'captured',payload:JSON.stringify({...order,planrecoverTripId:dataTripId(operation),planrecoverCurrency:'CAD'})}});
+      operation:{id:operation.id,status:'captured',payload:JSON.stringify({...order,planrecoverTripId:dataTripId(operation),planrecoverCurrency:'CAD',...retainedPaymentMetadata(operation)})}});
   }
 }
 
@@ -206,16 +207,16 @@ export async function reconcileRefund(operation: PaymentOperation, refund: Provi
   trip ??= retained!.state;
   requirePayPalCurrency(trip.plan);
   const expense = trip.events.find(entry => entry.providerId === captureId && entry.itemId === operation.item_id && entry.kind === 'expense' && entry.mode === 'sandbox' && entry.status === 'confirmed');
-  if (!expense || expense.amount !== operation.amount || Object.keys(expense.shares).length !== 1 ||
-      Object.keys(expense.contributions).length !== 1 || expense.shares[operation.member] !== operation.amount ||
+  if (!expense || expense.amount !== operation.amount || Object.values(expense.shares).some(n=>!Number.isSafeInteger(n)||n<0)||Object.values(expense.shares).reduce((a,b)=>a+b,0)!==operation.amount||
+      Object.keys(expense.contributions).length !== 1 ||
       expense.contributions[operation.member] !== operation.amount)
     throw Error('The refund ledger does not match the saved capture yet.');
   const recordedRefunds = trip.events.filter(entry => entry.providerId === refund.id);
   if (recordedRefunds.length > 1) throw Error('The refund ledger does not match the saved capture yet.');
   let ledgerRefund = recordedRefunds[0];
   if (ledgerRefund && (ledgerRefund.itemId !== operation.item_id || ledgerRefund.kind !== 'refund' || ledgerRefund.mode !== 'sandbox' ||
-      ledgerRefund.amount !== -operation.amount || Object.keys(ledgerRefund.shares).length !== 1 ||
-      Object.keys(ledgerRefund.contributions).length !== 1 || ledgerRefund.shares[operation.member] !== -operation.amount ||
+      ledgerRefund.amount !== -operation.amount || !equalMoneyMaps(ledgerRefund.shares,Object.fromEntries(Object.entries(expense.shares).map(([id,n])=>[id,-n]))) ||
+      Object.keys(ledgerRefund.contributions).length !== 1 ||
       ledgerRefund.contributions[operation.member] !== -operation.amount || !ledgerRefund.evidence.includes(`for capture ${captureId}.`)))
     throw Error('The refund ledger does not match the saved capture yet.');
   if (ledgerRefund?.status === 'confirmed' && refund.status !== 'COMPLETED')
@@ -227,7 +228,7 @@ export async function reconcileRefund(operation: PaymentOperation, refund: Provi
     // edits cannot erase money already refunded by the provider.
     ledgerRefund = {
       id: `paypal-refund-${refund.id}`, itemId: operation.item_id, kind: 'refund', label: 'Sandbox capture refund',
-      shares: { [operation.member]: -operation.amount }, contributions: { [operation.member]: -operation.amount },
+      shares: Object.fromEntries(Object.entries(expense.shares).map(([id,n])=>[id,-n])), contributions: { [operation.member]: -operation.amount },
       amount: -operation.amount, status,
       evidence: `PayPal sandbox refund ${refund.id} for capture ${captureId}. Approved recovery ${saved.planrecoverProposalId}. Bank availability unverified.`,
       mode: 'sandbox', providerId: refund.id, created: new Date().toISOString(),
