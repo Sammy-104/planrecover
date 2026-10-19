@@ -34,11 +34,11 @@ export function ReceiptScanner({planId,draft,jsonFetch,onResult,onPreview,onBusy
    if(pdf&&file.size>8*1024*1024)throw Error('Use a PDF under 8 MB or upload a photo of the receipt.');
    const image=pdf?file:await prepareReceiptImage(file);if(controller.signal.aborted)return;
    if(!pdf)showPreview(image);
-   progress(cloudConnected?'Saving photo and checking the receipt…':'Saving your receipt photo…');
+   progress(cloudConnected?'Saving your source and checking the receipt…':'Saving your receipt source…');
    const form=new FormData();form.set('file',image,pdf?'receipt.pdf':'receipt.jpg');form.set('tripId',planId);
    const result=await jsonFetch('/api/receipt',{method:'POST',body:form,signal:controller.signal});
    if(!mounted.current)return;onResult(result);
-   if(pdf){progress('PDF saved. Upload a photo of the page for automatic scanning, or paste its receipt text below.');return;}
+   if(pdf){progress(result.draft.sourceFacts?.items?.length?`PDF read: ${result.draft.sourceFacts.items.length} ${result.draft.sourceFacts.items.length===1?'item':'items'} added. Review every amount against the source.`:result.note||'PDF saved. Review it manually or paste its receipt text below.');return;}
    if(result.draft.sourceFacts?.items?.length){progress(`${result.draft.sourceFacts.items.length} items added. Review the amounts and who had each item.`);return;}
    await recognize(image,result.draft,controller);
   }catch(error){if(!controller.signal.aborted&&mounted.current){setError((error as Error).message);setStatus('Your saved uploads remain available below.');}}

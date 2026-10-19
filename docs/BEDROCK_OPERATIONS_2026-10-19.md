@@ -44,7 +44,11 @@ Before saving an action preview, the agent now runs the authoritative edit valid
 
 The assistant's concurrent-change check recognizes only its exact new recovery/departure review, with matching creator, unchanged terms and no approvals. Competing decisions or edits still invalidate the reply. A successful preparation no longer rejects itself merely because its own saved review became a new pending decision. Durable checkpoints and request replay continue preventing duplicate previews and inference.
 
+Proposals prepared from invitation views belong to the signed-in caller's account. Review links resolve the authenticated member's proposal identity and recheck current plan membership, including for older invitation-created action previews. Other members and removed members cannot read them. Legacy new-plan previews tied to another account must be prepared again before creation; they cannot create a plan under the wrong workspace. The review API returns only the required preview fields rather than internal owner identifiers.
+
 ## Validation and acceptance scope
+
+Private version 25 passed a live agent action preparation with a real saved review link, a simple CAD 5.00 PDF, and a two-line CAD 19.95 PDF containing a receipt discount, added tax and tip. The PDF results were saved as Bedrock revisions without source/payment confirmation or expense approval. Browser acceptance exposed two frontend integration gaps: proposal links initially selected the first listed plan, and receipt links were ignored. The follow-up binds reviews to their authenticated target/version, displays exact proposal fields, and opens receipt links only after selecting the authorized plan with the correct caller. Successful PDF extraction also has accurate status wording. The publication report records final live verification of these corrections.
 
 Offline tests cover shared admission across members/agent rounds, usage and failure recording, replay, private readback evidence, exact IDs, competing edits and receipt validation using migrated SQLite and intercepted provider responses. The release report records the final suite/build and publication result.
 

@@ -1,5 +1,5 @@
 import {env} from 'cloudflare:workers';
-import {workspaceAccess,checkOrigin,apiError,db} from '@/lib/store';
+import {workspaceAccess,checkOrigin,apiError,db,owner as signedInAccount} from '@/lib/store';
 import {PlanRepository} from '@/lib/plan-repository';
 import {assistantRequest,assistantAnswer,assistantFacts,savedPlanAnswer,assistantSystem} from '@/lib/plan-assistant';
 import {bedrockConfig,converseJson,converseAgent} from '@/lib/bedrock';
@@ -18,7 +18,7 @@ export async function POST(request:Request){let conversationLease:{id:string;tok
  if(!access.user)throw new BackendError('AUTH_REQUIRED','Sign in to chat about your saved plans.',401);
  const parsed=assistantRequest.safeParse(await invoiceJson(request,30000));
  if(!parsed.success)throw new BackendError('INVALID_ASSISTANT_REQUEST','Send a message of up to 2,000 characters with a short conversation history.');
- const input=parsed.data,repository=new PlanRepository(db()),identity=access.user;
+ const input=parsed.data,repository=new PlanRepository(db()),identity=access.user,proposalOwner=signedInAccount(request);
  if([input.conversationId,input.conversationVersion,input.requestId].some(v=>v!==undefined)&&[input.conversationId,input.conversationVersion,input.requestId].some(v=>v===undefined))throw new BackendError('CONVERSATION_INPUT','Provide the conversation ID, current version and request ID together.');
  if(access.share&&input.planId!==access.share.tripId)throw missingPlan();
  const plans=await repository.listPlans(identity.id),record=input.planId?await repository.getPlan(input.planId,identity):undefined;
@@ -47,7 +47,7 @@ export async function POST(request:Request){let conversationLease:{id:string;tok
     release=await acquireAiLease(db(),identity.id,'plan-draft');
     await withTrackedBedrock(db(),env as unknown as Record<string,unknown>,{owner:record?.owner??access.id,memberId:identity.id,planId:input.planId,feature:input.agent?'agent':'chat'},async observer=>{
      bedrockOperationId=observer.operationId;
-     if(input.agent&&!input.demoMember){const result=await converseAgent(provider,{system:agentInstructions,prompt:JSON.stringify(context),tools:record?agentToolDefinitions:agentToolDefinitions.filter(t=>t.name==='prepare_plan'),execute:(name,args)=>executeAgentTool({database:db(),repository,owner:access.id,identity,boundPlanId:input.planId,turn:input.conversationId?{conversationId:input.conversationId,requestId:input.requestId!,conversationOwner}:undefined},name,args)},{observer});reply=result.text;prepared=result.results;}
+     if(input.agent&&!input.demoMember){const result=await converseAgent(provider,{system:agentInstructions,prompt:JSON.stringify(context),tools:record?agentToolDefinitions:agentToolDefinitions.filter(t=>t.name==='prepare_plan'),execute:(name,args)=>executeAgentTool({database:db(),repository,owner:proposalOwner,identity,boundPlanId:input.planId,turn:input.conversationId?{conversationId:input.conversationId,requestId:input.requestId!,conversationOwner}:undefined},name,args)},{observer});reply=result.text;prepared=result.results;}
      else{const result=await converseJson(provider,{system:assistantSystem,prompt:JSON.stringify(context),validate:value=>assistantAnswer.parse(value)},{observer});reply=result.value.answer;followUps=result.value.followUps;}
     });mode='bedrock';
    }catch{if(input.conversationId)prepared=await savedToolResults(db(),conversationOwner,identity.id,input.conversationId,input.requestId);notice=prepared.length?'Your prepared reviews were saved. Open them below; the assistant could not finish its reply.':'AI could not answer just now. Here is the answer from your saved plan.';}finally{if(release)await release();}
@@ -86,7 +86,7 @@ export async function POST(request:Request){let conversationLease:{id:string;tok
    }
    const id=tool.result?.proposalId;
    if(typeof id!=='string'||!['prepare_plan','prepare_plan_action'].includes(tool.name??''))continue;
-   const saved=await new AgentProposalRepository(db()).get(access.id,identity,id);
+   const saved=await new AgentProposalRepository(db()).get(proposalOwner,identity,id);
    if(saved.plan_id!==record.state.plan.id||saved.status!=='review')continue;
    await recordBedrockWorkflowEvidence(db(),env as unknown as Record<string,unknown>,{owner:record.owner,memberId:identity.id,planId:record.state.plan.id!,operationId:bedrockOperationId,scope:'saved-agent-proposal-readback',proofReference:`${id}:${saved.plan_version}`});
   }

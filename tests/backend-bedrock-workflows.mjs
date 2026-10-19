@@ -29,10 +29,10 @@ globalThis.bedrockWorkflowTestEnv = {};
 let provider, calls = 0, checks = 0;
 globalThis.fetch = async (...args) => { calls += 1; return provider(...args); };
 
-function request(path, body, account = owner) {
+function request(path, body, account = owner, extraHeaders = {}) {
   return new Request(origin + path, {
     method:body === undefined ? 'GET' : 'POST',
-    headers:{origin, 'content-type':'application/json', ...(account ? {'oai-authenticated-user-id':account} : {})},
+    headers:{origin, 'content-type':'application/json', ...(account ? {'oai-authenticated-user-id':account} : {}), ...extraHeaders},
     ...(body === undefined ? {} : {body:JSON.stringify(body)}),
   });
 }
@@ -259,6 +259,62 @@ try {
       const proof = database.sqlite.prepare("SELECT owner,member_id,plan_id FROM bedrock_workflow_evidence WHERE feature='agent'").get();
       assert.deepEqual({...proof}, {owner, member_id:bob.id, plan_id:id});
       assert.equal(calls, 2);
+      await unchanged();
+    });
+
+  await check('An invitation editor can read and list a private preview after leaving the share link, with legacy ownership and revoked-membership fences',
+    async ({database, record, id, conversations, unchanged}) => {
+      const token = 'a'.repeat(64);
+      const tokenHash = Buffer.from(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token))).toString('hex');
+      database.sqlite.prepare('INSERT INTO trip_links(token_hash,token,owner,trip_id,role,created,expires) VALUES (?,?,?,?,?,?,?)')
+        .run(tokenHash, token, owner, id, 'editor', new Date().toISOString(), new Date(Date.now() + 3600000).toISOString());
+      const session = await conversations.create(owner, bob, id);
+      let round = 0;
+      provider = async (_url, init) => {
+        if (++round === 1) return model([tool('prepare_plan_action', {planId:id, version:record.version, action:{
+          type:'add_item', name:'Invitation editor synthetic task', category:'Preparation',
+          start:'2027-04-04T09:00:00-04:00', duration:15, price:0, participants:[bob.id], taskOwner:bob.id,
+        }})]);
+        const [result] = results(JSON.parse(init.body));
+        assert.equal(result.status, 'success');
+        return completion(`Your private synthetic review is ready: ${result.content[0].json.reviewUrl}`);
+      };
+      const value = await decoded(await routes.assistant.POST(request('/api/assistant', {planId:id, agent:true,
+        message:'Prepare my free synthetic task through this shared plan, without applying it.',
+        conversationId:session.id, conversationVersion:session.version, requestId:crypto.randomUUID()},
+      other, {'x-trip-share':token})));
+      assert.equal(value.mode, 'bedrock');
+      assert.equal(value.prepared.length, 1);
+      const proposalId = value.prepared[0].result.proposalId;
+      assert.equal(database.sqlite.prepare('SELECT owner,member_id FROM agent_proposals WHERE id=?').get(proposalId).owner, other);
+      const restored = await conversations.read(owner, bob, session.id);
+      assert.equal(restored.messages.at(-1).metadata.prepared[0].result.proposalId, proposalId);
+
+      // /flows leaves the invitation hash behind. All reads below deliberately omit its header.
+      const review = await decoded(await routes.proposals.GET(request('/api/agent-proposals?id=' + proposalId, undefined, other)));
+      assert.equal(review.preview.action.taskOwner, bob.id);
+      const legacyId = crypto.randomUUID();
+      database.sqlite.prepare('INSERT INTO agent_proposals(id,owner,member_id,plan_id,body,plan_version,created) VALUES (?,?,?,?,?,?,?)')
+        .run(legacyId, owner, bob.id, id, JSON.stringify(review.preview), record.version, new Date().toISOString());
+      const legacy = await decoded(await routes.proposals.GET(request('/api/agent-proposals?id=' + legacyId, undefined, other)));
+      assert.equal(legacy.preview.action.taskOwner, bob.id);
+      assert.equal(database.sqlite.prepare('SELECT owner FROM agent_proposals WHERE id=?').get(legacyId).owner, owner);
+      assert.equal('owner' in legacy, false);
+      const listed = await decoded(await routes.proposals.GET(request('/api/agent-proposals', undefined, other)));
+      assert.deepEqual(listed.proposals.map(proposal => proposal.id).sort(), [proposalId, legacyId].sort());
+      for (const inaccessible of [proposalId, legacyId])
+        await decoded(await routes.proposals.GET(request('/api/agent-proposals?id=' + inaccessible)), 404);
+      const ownerList = await decoded(await routes.proposals.GET(request('/api/agent-proposals')));
+      assert.equal(ownerList.proposals.some(proposal => [proposalId, legacyId].includes(proposal.id)), false);
+      const operation = database.sqlite.prepare("SELECT owner,member_id,plan_id FROM bedrock_operations WHERE feature='agent'").get();
+      assert.deepEqual({...operation}, {owner, member_id:bob.id, plan_id:id});
+      assert.equal(calls, 2);
+
+      database.sqlite.prepare("UPDATE plan_members SET role='legacy' WHERE owner=? AND plan_id=? AND member_id=?").run(owner, id, bob.id);
+      for (const inaccessible of [proposalId, legacyId])
+        await decoded(await routes.proposals.GET(request('/api/agent-proposals?id=' + inaccessible, undefined, other)), 404);
+      const revokedList = await decoded(await routes.proposals.GET(request('/api/agent-proposals', undefined, other)));
+      assert.equal(revokedList.proposals.some(proposal => [proposalId, legacyId].includes(proposal.id)), false);
       await unchanged();
     });
 
