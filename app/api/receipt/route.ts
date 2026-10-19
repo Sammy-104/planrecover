@@ -7,6 +7,7 @@ import { BackendError } from '@/lib/backend-errors';
 import { ReceiptDraftRepository,draftReceipt,receiptReviewFields,type ReceiptDraft } from '@/lib/receipt-drafts';
 import { extractReceipt } from '@/lib/receipt-extraction';
 import { acquireAiLease } from '@/lib/ai-usage';
+import {confirmReceiptBedrockReadback} from '@/lib/receipt-bedrock-evidence';
 
 const privateHeaders={'Cache-Control':'private, no-store'};
 const reviewRequest=z.object({
@@ -72,8 +73,10 @@ export async function POST(request: Request) {
     draft=await current.repository.extracting(current.scope,draft.id,draft.version);
     const result=await extractReceipt(env as unknown as Record<string,unknown>,{mime:file.type,bytes},planCurrency(current.state.plan),{
       acquire:()=>acquireAiLease(db(),current.scope.memberId,'receipt-extraction'),
+      tracking:{database:db(),...current.scope},
     });
     draft=await current.repository.extracted(current.scope,draft.id,draft.version,result);
+    await confirmReceiptBedrockReadback(db(),env as unknown as Record<string,unknown>,current.scope,draft,result.bedrockOperationId);
     return Response.json({...current.response(draft),note:draft.warnings.join(' · ')},{headers:privateHeaders});
   }catch(error){return apiError(error);}
 }

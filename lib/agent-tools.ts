@@ -4,7 +4,7 @@ import {PlanRepository} from './plan-repository.ts';
 import {PlanChangeService,changeRequest,compilePlanChange} from './plan-changes.ts';
 import {BackendError,conflict,forbidden} from './backend-errors.ts';
 import type {Identity} from './people.ts';
-import type {Action,State} from './model.ts';
+import {applyAction,type Action,type State} from './model.ts';
 import {checkpointTool,type AgentTurn} from './agent-checkpoints.ts';
 import {reviewPlanning} from './planning-review.ts';
 export type AgentContext={database:D1Database;repository:PlanRepository;owner:string;identity:Identity;boundPlanId?:string;turn?:AgentTurn;proposalId?:string};
@@ -40,6 +40,10 @@ export async function executeAgentTool(context:AgentContext,name:string,input:un
   const body=z.object({planId,version,action:z.unknown()}).strict().parse(input),record=await bound(context,body.planId);
   if(!['owner','editor'].includes(record.role))throw forbidden();if(record.version!==body.version)throw conflict();
   const parsed=parseWorkspaceMutation({version:body.version,action:body.action});if(!safeActions.has(parsed.action.type))throw new BackendError('AGENT_ACTION','This action must use its dedicated review flow.');
+  // Reuse the authoritative edit validation on an isolated copy before saving a preview.
+  // A model-supplied ID, member or task type must already be valid in this plan.
+  try{applyAction(structuredClone(record.state),{...parsed.action,actor:identity.id,tripId:body.planId} as Action);}
+  catch{throw new BackendError('AGENT_ACTION','The proposed change does not match the current plan items, members or task rules. Refresh the plan and prepare a valid preview.');}
   const action=parsed.action as any,candidates=['add_item','item_edit','task_edit'].includes(action.type)?[{...(record.state.items.find(i=>i.id===action.itemId)??{}),...action,id:undefined,price:action.price??null}]:[];
   const review=await reviewPlanning(database,record,identity.id,candidates,{removeIds:action.itemId?[action.itemId]:[]});
   const id=context.proposalId??crypto.randomUUID();await database.prepare('INSERT OR IGNORE INTO agent_proposals(id,owner,member_id,plan_id,body,plan_version,created) VALUES (?,?,?,?,?,?,?)').bind(id,owner,identity.id,body.planId,JSON.stringify({kind:'plan-action',action:parsed.action}),record.version,new Date().toISOString()).run();

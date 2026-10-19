@@ -162,6 +162,13 @@
       "when": 1792375782967,
       "tag": "0022_receipt_source_hash",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "6",
+      "when": 1792411200000,
+      "tag": "0023_bedrock_operations",
+      "breakpoints": true
     }
   ]
 }

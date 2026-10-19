@@ -7,6 +7,8 @@ import { planDraftRequest, planDraftPrompt, planDraftSystem, validatePlanDraft, 
 import { acquireAiLease } from '@/lib/ai-usage';
 import {loadPlanningPreferences} from '@/lib/planning-constraints';
 import {loadPlanningEvidence} from '@/lib/planning-evidence';
+import {withTrackedBedrock} from '@/lib/bedrock-operations';
+import {recordBedrockWorkflowEvidence} from '@/lib/bedrock-workflow-evidence';
 type Context = {params:Promise<{planId:string}>};
 
 async function boundedBody(request:Request) {
@@ -39,10 +41,12 @@ export async function POST(request:Request, context:Context) {
     const planning=await loadPlanningPreferences(db(),record.owner,planId,identity.id,record.state.plan.timezone);
     const evidence=await loadPlanningEvidence(db(),record.owner,planId);
     const release=await acquireAiLease(db(),identity.id,'plan-draft');
-    let result;
-    try{result=await converseJson(provider,{system:planDraftSystem,
+    let result,operationId:string|undefined;
+    try{result=await withTrackedBedrock(db(),env as unknown as Record<string,unknown>,{owner:record.owner,memberId:identity.id,planId,feature:'plan-draft'},observer=>{
+     operationId=observer.operationId;
+     return converseJson(provider,{system:planDraftSystem,
       prompt:planDraftPrompt(record.state,identity.id,parsed.data.prompt,planning.preferences,evidence),
-      validate:value=>validatePlanDraft(value,record.state)});}
+      validate:value=>validatePlanDraft(value,record.state)},{observer});});}
     finally{await release();}
     // Membership or plan edits may change while inference is running.
     const current=await repository.getPlan(planId,identity);
@@ -53,7 +57,9 @@ export async function POST(request:Request, context:Context) {
     if(freshPlanning.version!==planning.version)throw conflict();
     const freshEvidence=await loadPlanningEvidence(db(),record.owner,planId);
     if(JSON.stringify(freshEvidence)!==JSON.stringify(evidence))throw conflict();
+    const draft=previewPlanDraft(result.value,current.state,identity.id,freshPlanning.preferences,freshEvidence);
+    if(operationId)await recordBedrockWorkflowEvidence(db(),env as unknown as Record<string,unknown>,{owner:record.owner,memberId:identity.id,planId,operationId,scope:'draft-preview-constructed',proofReference:`${planId}:${record.version}`});
     return Response.json({planId,version:record.version,provider:result.provider,modelId:result.modelId,
-      usage:result.usage,draft:previewPlanDraft(result.value,current.state,identity.id,freshPlanning.preferences,freshEvidence)}, {headers:privateHeaders});
+      usage:result.usage,draft}, {headers:privateHeaders});
   }catch(error){return apiError(error);}
 }

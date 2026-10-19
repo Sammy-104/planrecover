@@ -24,9 +24,23 @@ export type BedrockJsonResult<T> = {
   modelId: string;
   usage: { inputTokens: number; outputTokens: number; totalTokens: number };
 };
-type BedrockErrorCode = 'BEDROCK_CONFIG' | 'BEDROCK_INPUT' | 'BEDROCK_AUTH'
+export type BedrockErrorCode = 'BEDROCK_CONFIG' | 'BEDROCK_INPUT' | 'BEDROCK_AUTH'
   | 'BEDROCK_MODEL' | 'BEDROCK_THROTTLED' | 'BEDROCK_TIMEOUT' | 'BEDROCK_UNAVAILABLE'
-  | 'BEDROCK_RESPONSE' | 'BEDROCK_OUTPUT' | 'BEDROCK_BLOCKED';
+  | 'BEDROCK_RESPONSE' | 'BEDROCK_OUTPUT' | 'BEDROCK_BLOCKED'
+  | 'BEDROCK_SHARED_LIMIT' | 'BEDROCK_DAILY_LIMIT' | 'BEDROCK_ACCOUNTING';
+export const BEDROCK_ERROR_CODES = ['BEDROCK_CONFIG','BEDROCK_INPUT','BEDROCK_AUTH','BEDROCK_MODEL',
+  'BEDROCK_THROTTLED','BEDROCK_TIMEOUT','BEDROCK_UNAVAILABLE','BEDROCK_RESPONSE','BEDROCK_OUTPUT',
+  'BEDROCK_BLOCKED','BEDROCK_SHARED_LIMIT','BEDROCK_DAILY_LIMIT','BEDROCK_ACCOUNTING'] as const;
+export type BedrockUsage = { inputTokens: number; outputTokens: number; totalTokens: number };
+/** Metadata only: observers never receive prompts, media, model IDs or credentials. */
+export type BedrockObserver = {
+  readonly operationId?: string;
+  readonly configurationHash?: string;
+  beforeInvocation: (reservation: { estimatedInputTokens: number; maxOutputTokens: number; timeoutMs: number }) => Promise<string>;
+  recordUsage: (invocationId: string, usage: BedrockUsage) => Promise<void>;
+  afterInvocation: (invocationId: string, result: { outcome: 'succeeded' | 'failed'; latencyMs: number;
+    errorCode?: BedrockErrorCode; diagnostic?: BedrockDiagnostic }) => Promise<void>;
+};
 
 export const BEDROCK_DIAGNOSTIC_STAGES = ['request', 'headers', 'body', 'validation'] as const;
 export const BEDROCK_AWS_EXCEPTIONS = ['AccessDeniedException', 'ResourceNotFoundException',
@@ -62,7 +76,7 @@ function ownValue(value: unknown, key: string): unknown {
     return descriptor && 'value' in descriptor ? descriptor.value : undefined;
   } catch { return undefined; }
 }
-function safeDiagnostic(value: unknown): BedrockDiagnostic | undefined {
+export function safeBedrockDiagnostic(value: unknown): BedrockDiagnostic | undefined {
   const stage = allowed(ownValue(value, 'stage'), BEDROCK_DIAGNOSTIC_STAGES);
   if (!stage) return undefined;
   const status = ownValue(value, 'upstreamStatus');
@@ -83,7 +97,7 @@ function networkDiagnostic(error: unknown) {
       ?? allowed(ownValue(ownValue(error, 'cause'), 'code'), BEDROCK_NETWORK_ERROR_CODES) };
 }
 function attachDiagnostic(error: BedrockError, diagnostic: BedrockDiagnostic, cause?: unknown) {
-  error.diagnostic = safeDiagnostic({ ...diagnostic, ...(cause === undefined ? {} : networkDiagnostic(cause)) });
+  error.diagnostic = safeBedrockDiagnostic({ ...diagnostic, ...(cause === undefined ? {} : networkDiagnostic(cause)) });
   return error;
 }
 
@@ -94,7 +108,7 @@ export class BedrockError extends BackendError {
     super(code, message, status);
     this.name = 'BedrockError';
     this.retryable = retryable;
-    if (diagnostic) this.diagnostic = safeDiagnostic(diagnostic);
+    if (diagnostic) this.diagnostic = safeBedrockDiagnostic(diagnostic);
   }
 }
 
@@ -212,36 +226,146 @@ function makeBody<T>(request: BedrockJsonRequest<T>, maxTokens: number) {
   });
 }
 
+function knownUsage(response: unknown, maxTokens: number): BedrockUsage | null {
+  const usage = ownValue(response, 'usage');
+  const inputTokens = ownValue(usage, 'inputTokens'), outputTokens = ownValue(usage, 'outputTokens'), totalTokens = ownValue(usage, 'totalTokens');
+  if (![inputTokens, outputTokens, totalTokens].every(value => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0)
+    || Number(outputTokens) > maxTokens || Number(totalTokens) > 1_000_000 || totalTokens !== Number(inputTokens) + Number(outputTokens)) return null;
+  return { inputTokens: Number(inputTokens), outputTokens: Number(outputTokens), totalTokens: Number(totalTokens) };
+}
+
+/** Conservative admission estimates, not a tokenizer or an exact spend guarantee. */
+function inputReservation(body: string) {
+  const payload = JSON.parse(body); let removed = 0, media = 0;
+  for (const message of payload.messages ?? []) for (const block of message.content ?? []) {
+    const image = block.image?.source?.bytes, document = block.document?.source?.bytes;
+    if (typeof image === 'string') { removed += image.length; media += 16_384; }
+    if (typeof document === 'string') { removed += document.length; media += Math.min(131_072, Math.ceil(document.length * 3 / 4)); }
+  }
+  // One token per UTF-8 byte is intentionally cautious for text. Media estimates can differ from billed usage.
+  return Math.max(1, encoder.encode(body).length - removed + media);
+}
+
+async function observedInvocation<T>(config: BedrockConfig, body: string, maxTokens: number,
+  diagnostic: BedrockDiagnostic, observer: BedrockObserver | undefined,
+  execute: (controller: AbortController, invocationId?: string) => Promise<T>, timeoutMs = config.timeoutMs,
+  overallDeadline = Infinity): Promise<T> {
+  const started = Date.now(), deadline = Math.min(started + timeoutMs, overallDeadline);
+  const invocationId = await observer?.beforeInvocation({ estimatedInputTokens: inputReservation(body), maxOutputTokens: maxTokens, timeoutMs });
+  const remaining = deadline - Date.now(), controller = new AbortController(); let timer: ReturnType<typeof setTimeout> | undefined;
+  const expiration = new Promise<never>((_, reject) => { timer = setTimeout(() => {
+    controller.abort(); reject(new BedrockError('BEDROCK_TIMEOUT', 'Amazon Bedrock did not respond in time. Try again later.', 504, true, diagnostic));
+  }, Math.max(1,remaining)); });
+  let outcome: 'succeeded' | 'failed' = 'failed', failure: unknown;
+  try {
+    if (remaining <= 0) {
+      controller.abort();
+      // Admission completed after the deadline; no provider HTTP request was made.
+      if (observer && invocationId) await observer.recordUsage(invocationId, { inputTokens: 0, outputTokens: 0, totalTokens: 0 });
+      throw new BedrockError('BEDROCK_TIMEOUT', 'Amazon Bedrock did not respond in time. Try again later.', 504, true, diagnostic);
+    }
+    const value = await Promise.race([execute(controller, invocationId), expiration]);
+    if (Date.now() >= deadline) { controller.abort(); throw new BedrockError('BEDROCK_TIMEOUT', 'Amazon Bedrock did not respond in time. Try again later.', 504, true, diagnostic); }
+    outcome = 'succeeded'; return value;
+  }
+  catch (error) { failure = error; throw error; }
+  finally {
+    if (timer !== undefined) clearTimeout(timer);
+    if (observer && invocationId) await observer.afterInvocation(invocationId, { outcome,
+      latencyMs: Math.min(300_000, Math.max(0, Date.now() - started)),
+      ...(failure instanceof BedrockError ? { errorCode: failure.code as BedrockErrorCode, diagnostic: failure.diagnostic ?? diagnostic } : {}) });
+  }
+}
+
+async function recordKnownUsage(observer: BedrockObserver | undefined, invocationId: string | undefined, data: unknown, maxTokens: number) {
+  const usage = knownUsage(data, maxTokens);
+  // Capture trustworthy counts before application schema validation can reject an otherwise billed response.
+  if (observer && invocationId && usage) await observer.recordUsage(invocationId, usage);
+}
+
 /** Bounded client-side tool loop. Tools only read facts or save review proposals. */
-export async function converseAgent(configuration:BedrockConfig,input:{system:string;prompt:string;tools:{name:string;description:string;inputSchema:unknown}[];execute:(name:string,args:unknown)=>Promise<unknown>},dependencies:{fetch?:typeof fetch}={}){
- const config=validateConfig(configuration);if(input.tools.length>8||!input.tools.length||input.prompt.length>46000||input.system.length>12000)throw new BedrockError('BEDROCK_INPUT','The agent request is too large.',400);
- const names=new Set(input.tools.map(t=>t.name));const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),Math.min(45000,config.timeoutMs*2));
- const messages:unknown[]=[{role:'user',content:[{text:input.prompt}]}],results:{name:string;result:unknown}[]=[];let calls=0,totalTokens=0;
- let diagnostic:BedrockDiagnostic={stage:'request',upstreamStatus:null,awsException:null,networkErrorName:null,networkErrorCode:null};
- try{for(let round=0;round<3;round++){
-  diagnostic={stage:'request',upstreamStatus:null,awsException:null,networkErrorName:null,networkErrorCode:null};
-  const response=await (dependencies.fetch??fetch)(`https://bedrock-runtime.${config.region}.amazonaws.com/model/${encodeURIComponent(config.modelId)}/converse`,{method:'POST',redirect:'manual',signal:controller.signal,
-   headers:{Authorization:`Bearer ${config.apiKey}`,'Content-Type':'application/json',Accept:'application/json'},body:JSON.stringify({system:[{text:finalAnswerInstruction},{text:input.system}],messages,inferenceConfig:{maxTokens:Math.min(config.maxTokens,1500)},toolConfig:{tools:input.tools.map(t=>({toolSpec:{name:t.name,description:t.description,inputSchema:{json:t.inputSchema}}})),toolChoice:{auto:{}}}})});
-  diagnostic.stage='headers';diagnostic.upstreamStatus=response.status;diagnostic.awsException=allowed(response.headers.get('x-amzn-errortype'),BEDROCK_AWS_EXCEPTIONS);
-  if(!response.ok)throw providerError(response.status);diagnostic.stage='body';const data=await readBounded(response,controller.signal);diagnostic.stage='validation';diagnostic.stopReason=allowed(ownValue(data,'stopReason'),BEDROCK_STOP_REASONS)??undefined;
-  if(!record(data)||!record(data.output)||!record(data.output.message)||data.output.message.role!=='assistant'||!Array.isArray(data.output.message.content)||data.output.message.content.length>8)throw new BedrockError('BEDROCK_RESPONSE','Invalid agent response.');
-  const usage=data.usage;if(!record(usage)||!Number.isSafeInteger(usage.totalTokens)||Number(usage.totalTokens)<0)throw new BedrockError('BEDROCK_RESPONSE','Invalid agent usage.');totalTokens+=Number(usage.totalTokens);if(totalTokens>24000)throw new BedrockError('BEDROCK_OUTPUT','Agent request budget reached.');
-  const content=data.output.message.content;
-  if(data.stopReason==='end_turn'){
-   if(content.some(b=>!record(b)||Object.keys(b).length!==1||typeof b.text!=='string'))throw new BedrockError('BEDROCK_OUTPUT','Unsupported agent response.');
-   const text=content.map(b=>(b as {text:string}).text).join('');if(!text.trim()||text.length>8000)throw new BedrockError('BEDROCK_OUTPUT','Invalid agent answer.');diagnostic.validationReason='output-wrapper';return {text:finalAnswerText(text),results,totalTokens};
+export async function converseAgent(configuration: BedrockConfig,
+  input: { system: string; prompt: string; tools: { name: string; description: string; inputSchema: unknown }[];
+    execute: (name: string, args: unknown) => Promise<unknown> },
+  dependencies: { fetch?: typeof fetch; observer?: BedrockObserver } = {}) {
+  const config = validateConfig(configuration);
+  if (input.tools.length > 8 || !input.tools.length || input.prompt.length > 46000 || input.system.length > 12000)
+    throw new BedrockError('BEDROCK_INPUT', 'The agent request is too large.', 400);
+  const names = new Set(input.tools.map(tool => tool.name));
+  const deadline = Date.now() + Math.min(45_000, config.timeoutMs * 2);
+  const messages: unknown[] = [{ role: 'user', content: [{ text: input.prompt }] }];
+  const results: { name: string; result: unknown }[] = []; let calls = 0, totalTokens = 0;
+  for (let round = 0; round < 3; round++) {
+    const diagnostic: BedrockDiagnostic = { stage: 'request', upstreamStatus: null, awsException: null, networkErrorName: null, networkErrorCode: null };
+    const maxTokens = Math.min(config.maxTokens, 1500), remaining = Math.min(config.timeoutMs, deadline - Date.now());
+    if (remaining <= 0) throw new BedrockError('BEDROCK_TIMEOUT', 'The planning agent did not respond in time.', 504, true);
+    const body = JSON.stringify({ system: [{ text: finalAnswerInstruction }, { text: input.system }], messages,
+      inferenceConfig: { maxTokens }, toolConfig: { tools: input.tools.map(tool => ({ toolSpec: {
+        name: tool.name, description: tool.description, inputSchema: { json: tool.inputSchema } } })), toolChoice: { auto: {} } } });
+    const decoded = await observedInvocation(config, body, maxTokens, diagnostic, dependencies.observer, async (controller, invocationId) => {
+      try {
+        const response = await (dependencies.fetch ?? fetch)(`https://bedrock-runtime.${config.region}.amazonaws.com/model/${encodeURIComponent(config.modelId)}/converse`, {
+          method: 'POST', redirect: 'manual', signal: controller.signal,
+          headers: { Authorization: `Bearer ${config.apiKey}`, 'Content-Type': 'application/json', Accept: 'application/json' }, body });
+        diagnostic.stage = 'headers'; diagnostic.upstreamStatus = response.status;
+        diagnostic.awsException = allowed(response.headers.get('x-amzn-errortype'), BEDROCK_AWS_EXCEPTIONS);
+        if (!response.ok) { await response.body?.cancel().catch(() => undefined); throw providerError(response.status); }
+        if ((response.headers.get('Content-Type') ?? '').split(';')[0].trim().toLowerCase() !== 'application/json') {
+          await response.body?.cancel().catch(() => undefined); throw new BedrockError('BEDROCK_RESPONSE', 'Unsupported agent response.');
+        }
+        diagnostic.stage = 'body'; const data = await readBounded(response, controller.signal);
+        await recordKnownUsage(dependencies.observer, invocationId, data, maxTokens);
+        diagnostic.stage = 'validation'; diagnostic.stopReason = allowed(ownValue(data, 'stopReason'), BEDROCK_STOP_REASONS) ?? undefined;
+        if (!record(data) || !record(data.output) || !record(data.output.message) || data.output.message.role !== 'assistant'
+          || !Array.isArray(data.output.message.content) || data.output.message.content.length > 8)
+          throw new BedrockError('BEDROCK_RESPONSE', 'Invalid agent response.');
+        const usage = knownUsage(data, maxTokens);
+        if (!usage)
+          throw new BedrockError('BEDROCK_RESPONSE', 'Invalid agent usage.');
+        totalTokens += usage.totalTokens;
+        if (totalTokens > 24000) throw new BedrockError('BEDROCK_OUTPUT', 'Agent request budget reached.');
+        const content = data.output.message.content;
+        if (data.stopReason === 'end_turn') {
+          if (content.some(block => !record(block) || Object.keys(block).length !== 1 || typeof block.text !== 'string'))
+            throw new BedrockError('BEDROCK_OUTPUT', 'Unsupported agent response.');
+          const text = content.map(block => (block as { text: string }).text).join('');
+          if (!text.trim() || text.length > 8000) throw new BedrockError('BEDROCK_OUTPUT', 'Invalid agent answer.');
+          diagnostic.validationReason = 'output-wrapper';
+          return { text: finalAnswerText(text), message: data.output.message, tools: [] as { name: string; toolUseId: string; input: unknown }[] };
+        }
+        if (data.stopReason !== 'tool_use' || round === 2) throw new BedrockError('BEDROCK_OUTPUT', 'The agent reached its bounded tool limit.');
+        const seen = new Set<string>(), tools: { name: string; toolUseId: string; input: unknown }[] = [];
+        for (const block of content) {
+          if (!record(block) || Object.keys(block).length !== 1) throw new BedrockError('BEDROCK_OUTPUT', 'Unsupported tool response.');
+          if (typeof block.text === 'string') continue;
+          const tool = block.toolUse;
+          if (!record(tool) || typeof tool.name !== 'string' || !names.has(tool.name) || typeof tool.toolUseId !== 'string'
+            || tool.toolUseId.length > 180 || seen.has(tool.toolUseId) || ++calls > 4)
+            throw new BedrockError('BEDROCK_OUTPUT', 'Invalid agent tool call.');
+          seen.add(tool.toolUseId); tools.push({ name: tool.name, toolUseId: tool.toolUseId, input: tool.input });
+        }
+        if (!tools.length) throw new BedrockError('BEDROCK_OUTPUT', 'Missing tool call.');
+        return { text: null, message: data.output.message, tools };
+      } catch (error) {
+        if (error instanceof BedrockError) throw attachDiagnostic(error, diagnostic);
+        if (controller.signal.aborted) throw attachDiagnostic(new BedrockError('BEDROCK_TIMEOUT', 'The planning agent did not respond in time.', 504, true), diagnostic, error);
+        throw attachDiagnostic(new BedrockError('BEDROCK_UNAVAILABLE', 'The planning agent is temporarily unavailable.', 503), diagnostic, error);
+      }
+    }, remaining, deadline);
+    if (Date.now() >= deadline) throw new BedrockError('BEDROCK_TIMEOUT', 'The planning agent did not respond in time.', 504, true);
+    if (decoded.text !== null) return { text: decoded.text, results, totalTokens };
+    messages.push(decoded.message); const blocks: unknown[] = [];
+    for (const tool of decoded.tools) {
+      if (Date.now() >= deadline) throw new BedrockError('BEDROCK_TIMEOUT', 'The planning agent did not respond in time.', 504, true);
+      let result: unknown, status = 'success';
+      try { result = await input.execute(tool.name, tool.input); if (JSON.stringify(result).length > 24000) throw Error('Result too large'); results.push({ name: tool.name, result }); }
+      catch { result = { error: 'This preview could not be prepared. Check current details in PlanRecover.' }; status = 'error'; }
+      if (Date.now() >= deadline) throw new BedrockError('BEDROCK_TIMEOUT', 'The planning agent did not respond in time.', 504, true);
+      blocks.push({ toolResult: { toolUseId: tool.toolUseId, content: [{ json: result }], status } });
+    }
+    messages.push({ role: 'user', content: blocks });
   }
-  if(data.stopReason!=='tool_use'||round===2)throw new BedrockError('BEDROCK_OUTPUT','The agent reached its bounded tool limit.');
-  const blocks:unknown[]=[],seen=new Set<string>();messages.push(data.output.message);
-  for(const block of content){if(!record(block)||Object.keys(block).length!==1)throw new BedrockError('BEDROCK_OUTPUT','Unsupported tool response.');if(typeof block.text==='string')continue;
-   const tool=block.toolUse;if(!record(tool)||typeof tool.name!=='string'||!names.has(tool.name)||typeof tool.toolUseId!=='string'||tool.toolUseId.length>180||seen.has(tool.toolUseId)||++calls>4)throw new BedrockError('BEDROCK_OUTPUT','Invalid agent tool call.');seen.add(tool.toolUseId);
-   let result:unknown,status='success';try{result=await input.execute(tool.name,tool.input);if(JSON.stringify(result).length>24000)throw Error('Result too large');results.push({name:tool.name,result});}catch{result={error:'This preview could not be prepared. Check current details in PlanRecover.'};status='error';}
-   blocks.push({toolResult:{toolUseId:tool.toolUseId,content:[{json:result}],status}});
-  }
-  if(!blocks.length)throw new BedrockError('BEDROCK_OUTPUT','Missing tool call.');messages.push({role:'user',content:blocks});
- }
- throw new BedrockError('BEDROCK_OUTPUT','The agent could not finish.');
- }catch(error){if(error instanceof BedrockError)throw attachDiagnostic(error,diagnostic);throw attachDiagnostic(new BedrockError('BEDROCK_UNAVAILABLE','The planning agent is temporarily unavailable.',503),diagnostic,error);}finally{clearTimeout(timeout);}
+  throw new BedrockError('BEDROCK_OUTPUT', 'The agent could not finish.');
 }
 
 async function readBounded(response: Response, signal: AbortSignal) {
@@ -346,19 +470,11 @@ function result<T>(response: unknown, request: BedrockJsonRequest<T>, config: Be
 
 /** One bounded, potentially billed POST. Retryable errors are classified, never automatically retried. */
 export async function converseJson<T>(configuration: BedrockConfig, request: BedrockJsonRequest<T>,
-  dependencies: { fetch?: typeof fetch } = {}): Promise<BedrockJsonResult<T>> {
+  dependencies: { fetch?: typeof fetch; observer?: BedrockObserver } = {}): Promise<BedrockJsonResult<T>> {
   const config = validateConfig(configuration);
   const body = makeBody(request, config.maxTokens);
-  const controller = new AbortController();
   const diagnostic: BedrockDiagnostic = { stage: 'request', upstreamStatus: null, awsException: null, networkErrorName: null, networkErrorCode: null };
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  const expiration = new Promise<never>((_, reject) => {
-    timeout = setTimeout(() => {
-      controller.abort();
-      reject(new BedrockError('BEDROCK_TIMEOUT', 'Amazon Bedrock did not respond in time. Try again later.', 504, true, diagnostic));
-    }, config.timeoutMs);
-  });
-  const execute = async () => {
+  const execute = async (controller: AbortController, invocationId?: string) => {
     try {
       const response = await (dependencies.fetch ?? fetch)(
         `https://bedrock-runtime.${config.region}.amazonaws.com/model/${encodeURIComponent(config.modelId)}/converse`, {
@@ -379,6 +495,7 @@ export async function converseJson<T>(configuration: BedrockConfig, request: Bed
       }
       diagnostic.stage = 'body';
       const data = await readBounded(response, controller.signal);
+      await recordKnownUsage(dependencies.observer, invocationId, data, config.maxTokens);
       diagnostic.stage = 'validation';
       return result(data, request, config, diagnostic);
     } catch (error) {
@@ -388,6 +505,5 @@ export async function converseJson<T>(configuration: BedrockConfig, request: Bed
       throw attachDiagnostic(new BedrockError('BEDROCK_UNAVAILABLE', 'Amazon Bedrock is temporarily unavailable. Try again later.', 503, true), diagnostic, error);
     }
   };
-  try { return await Promise.race([execute(), expiration]); }
-  finally { if (timeout !== undefined) clearTimeout(timeout); }
+  return observedInvocation(config, body, config.maxTokens, diagnostic, dependencies.observer, execute);
 }

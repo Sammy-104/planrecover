@@ -8,12 +8,14 @@ import {PlanRepository} from './plan-repository.ts';
 import type {Identity} from './people.ts';
 import {healthAlertConfiguration} from './health-alerts.ts';
 import {webPushConfig} from './web-push.ts';
+import {readBedrockOperationsSummary,withTrackedBedrock,bedrockSharedControls} from './bedrock-operations.ts';
+import {readBedrockWorkflowEvidence} from './bedrock-workflow-evidence.ts';
 
 type Settings=Record<string,unknown>;
 type Configuration='configured'|'missing'|'invalid';
 type Verification='unverified'|'running'|'passed'|'failed'|'interrupted'|'stale';
 const provider='bedrock-readiness',kind='synthetic-json-check',prefix='readiness-bedrock-';
-const outcomes=['passed','access-denied','model-unavailable','rate-limited','timed-out','invalid-response','unavailable','interrupted','authorization-changed'] as const;
+const outcomes=['passed','access-denied','model-unavailable','rate-limited','shared-limit','timed-out','invalid-response','unavailable','interrupted','authorization-changed'] as const;
 const usageSchema=z.object({inputTokens:z.number().int().nonnegative().max(1_000_000),outputTokens:z.number().int().min(0).max(128),totalTokens:z.number().int().nonnegative().max(1_000_000)}).strict();
 const diagnosticSchema=z.object({stage:z.enum(BEDROCK_DIAGNOSTIC_STAGES),upstreamStatus:z.number().int().min(100).max(599).nullable(),awsException:z.enum(BEDROCK_AWS_EXCEPTIONS).nullable(),networkErrorName:z.enum(BEDROCK_NETWORK_ERROR_NAMES).nullable(),networkErrorCode:z.enum(BEDROCK_NETWORK_ERROR_CODES).nullable(),validationReason:z.enum(BEDROCK_VALIDATION_REASONS).optional(),stopReason:z.enum(BEDROCK_STOP_REASONS).optional()}).strict();
 const storedResult=z.object({version:z.literal(1),outcome:z.enum(outcomes),usage:usageSchema.nullable(),diagnostic:diagnosticSchema.optional()}).strict();
@@ -27,7 +29,7 @@ const credential=(value:unknown,min=1,max=4096)=>typeof value==='string'&&value.
 const stamp=(value:string)=>Number.isFinite(Date.parse(value))?new Date(value).toISOString():'';
 
 function bedrockSettings(settings:Settings):{configuration:Configuration;config:BedrockConfig|null}{
- try{const config=bedrockConfig(settings);return {configuration:config?'configured':'missing',config};}
+ try{const config=bedrockConfig(settings);if(config)bedrockSharedControls(settings);return {configuration:config?'configured':'missing',config};}
  catch{return {configuration:'invalid',config:null};}
 }
 function paypalConfiguration(settings:Settings):Configuration{
@@ -62,6 +64,7 @@ function failureOutcome(error:unknown):typeof outcomes[number]{
  if(code==='BEDROCK_AUTH')return 'access-denied';
  if(code==='BEDROCK_MODEL')return 'model-unavailable';
  if(code==='BEDROCK_THROTTLED')return 'rate-limited';
+ if(code==='BEDROCK_SHARED_LIMIT'||code==='BEDROCK_DAILY_LIMIT')return 'shared-limit';
  if(code==='BEDROCK_TIMEOUT')return 'timed-out';
  if(['BEDROCK_RESPONSE','BEDROCK_OUTPUT','BEDROCK_BLOCKED'].includes(code))return 'invalid-response';
  return 'unavailable';
@@ -99,10 +102,12 @@ export class ServiceReadinessService{
  private ownOperation(row:Operation,owner:string,planId:string){if(row.owner!==owner||row.plan_id!==planId||row.provider!==provider||row.kind!==kind)throw conflict();return row;}
  async inspect(planId:string,identity:Identity,settings:Settings,now=Date.now()){
   const record=await this.owner(planId,identity),bedrock=bedrockSettings(settings),paypal=paypalConfiguration(settings);
-  const [last,background,evidence]=await Promise.all([
+  const [last,background,evidence,activity,workflowEvidence]=await Promise.all([
    this.database.prepare('SELECT * FROM adapter_operations WHERE owner=? AND plan_id=? AND provider=? AND kind=? ORDER BY created DESC,id DESC LIMIT 1').bind(record.owner,planId,provider,kind).first<Operation>(),
    this.database.prepare('SELECT status,last_started,last_completed FROM background_job_runs WHERE owner=?').bind(record.owner).first<{status:string;last_started:string|null;last_completed:string|null}>(),
    observedServiceEvidence(this.database,record.owner,planId),
+   bedrock.config?readBedrockOperationsSummary(this.database,settings,record.owner,planId,now):null,
+   readBedrockWorkflowEvidence(this.database,settings,record.owner,planId),
   ]);
   const check=last?checkView(last,now):null;let verification:Verification='unverified';
   if(last&&bedrock.config){let fingerprint='';try{fingerprint=JSON.parse(last.request).configurationHash;}catch{}
@@ -113,7 +118,7 @@ export class ServiceReadinessService{
   let supplier=genericConfiguration(settings,'SUPPLIER');if(supplier==='configured'&&settings.SUPPLIER_MODE!=='sandbox')supplier='invalid';
   const notifications=notificationConfiguration(settings);
   return {configurationIsNotVerification:true,services:{
-   bedrock:{configuration:bedrock.configuration,verification,lastCheck:check,scope:'synthetic-json-converse',fullWorkflowVerification:'unverified'},
+   bedrock:{configuration:bedrock.configuration,verification,lastCheck:check,scope:'synthetic-json-converse',activity,workflowEvidence,fullWorkflowVerification:workflowEvidence.verification},
    paypal:{...basic(paypal),scope:'sandbox-credentials',evidence:evidence.paypal},webhook:{...basic(webhook),scope:'signed-ingress',evidence:evidence.webhook},
    runner:{...basic(runner),scope:'unattended-schedule',evidence:evidence.runner,lastObservedRun:background?{status:['idle','running','completed','retry'].includes(background.status)?background.status:'unknown',startedAt:background.last_started?stamp(background.last_started):null,completedAt:background.last_completed?stamp(background.last_completed):null}:null},
    supplier:{...basic(supplier),scope:'supplier-bridge',evidence:evidence.supplier},notifications:{...basic(notifications.configuration),scope:'provider-delivery',channels:{email:{...basic(notifications.email),provider:notifications.emailProvider,enabled:notifications.emailEnabled,activation:notifications.emailEnabled?'enabled':'disabled',evidence:evidence.email},push:{...basic(notifications.push),provider:notifications.pushProvider,enabled:notifications.pushEnabled,activation:notifications.pushEnabled?'enabled':'disabled',evidence:evidence.push}}},
@@ -142,9 +147,9 @@ export class ServiceReadinessService{
    let outcome:typeof outcomes[number]='unavailable',usage:z.infer<typeof usageSchema>|null=null,diagnostic:z.infer<typeof diagnosticSchema>|undefined;
    try{
     await this.owner(planId,identity);
-    const result=await converseJson({...configured.config,maxTokens:128,timeoutMs:Math.min(8000,configured.config.timeoutMs)},
+    const result=await withTrackedBedrock(this.database,settings,{owner:record.owner,memberId:identity.id,planId,feature:'diagnostic'},observer=>converseJson({...configured.config!,maxTokens:128,timeoutMs:Math.min(8000,configured.config!.timeoutMs)},
      {system:'Perform a synthetic connectivity check. Return only the JSON object {"ok":true}.',prompt:'Return {"ok":true}. No user, plan or receipt data is included.',validate:value=>z.object({ok:z.literal(true)}).strict().parse(value)},
-     {fetch:dependencies.fetch});outcome='passed';usage=result.usage;
+     {fetch:dependencies.fetch,observer}));outcome='passed';usage=result.usage;
    }catch(error){outcome=error instanceof BackendError&&['FORBIDDEN','PLAN_NOT_FOUND'].includes(error.code)?'authorization-changed':failureOutcome(error);if(error instanceof BedrockError){const checked=diagnosticSchema.safeParse(error.diagnostic);if(checked.success)diagnostic=checked.data;}}
    const response=JSON.stringify({version:1,outcome,usage,...(diagnostic?{diagnostic}:{})}),saved=await this.database.prepare("UPDATE adapter_operations SET status=?,response=?,lease_token=NULL,lease_until=0,updated=? WHERE id=? AND owner=? AND plan_id=? AND status='processing' AND lease_token=?")
     .bind(outcome==='passed'?'completed':'failed',response,new Date(now()).toISOString(),id,record.owner,planId,token).run();

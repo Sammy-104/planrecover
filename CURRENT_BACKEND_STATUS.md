@@ -4,6 +4,8 @@ The current scope is [CURRENT_SCOPE.md](docs/CURRENT_SCOPE.md). Earlier mileston
 
 ## October 19 Bedrock follow-up
 
+The next integration adds shared per-invocation admission, metadata-only token/failure accounting and authenticated feature readback observations. It preserves per-person limits, reviewed proposals and manual receipt review. See [Bedrock operations and workflow integration](docs/BEDROCK_OPERATIONS_2026-10-19.md) for settings, evidence boundaries and proposal-validation corrections. The release report records its actual publication and live results.
+
 AWS now shows an applied Canada Central Nova Lite cross-region quota of 400,000 tokens/minute and 20 requests/minute. The existing Canadian application inference profile is Active. The current Free plan, $120 applicable credits and April 14, 2027 access end date were checked before testing. One synthetic AWS console request returned valid JSON using 17 input and 6 output tokens.
 
 The pre-fix hosted check failed before inference. A local real Worker reproduction identified unsupported `redirect: 'error'` as the connection bug. Affected adapters now use manual redirect handling and continue rejecting redirect responses, without forwarding credentials. Bedrock failures retain only allowlisted connection stage/status metadata for owner inspection. Hosted checks and feature acceptance remain distinct from this console and offline evidence; inspect the saved Service readiness result and the October 19 verification report. See [the connection fix](docs/BEDROCK_CONNECTION_FIX_2026-10-19.md).

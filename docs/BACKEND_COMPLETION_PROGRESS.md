@@ -2,6 +2,8 @@
 
 The latest batch implements work that does not require Bedrock and carries forward the audited backend into the supplied frontend. The private Worker/D1/R2 architecture, immutable financial records and explicit approvals remain authoritative. External delivery, a public relay, the existing paused schedule and provider mutations are not activated by this source update.
 
+October 19 integration follow-up: [shared Bedrock controls and workflow observations](BEDROCK_OPERATIONS_2026-10-19.md) add durable per-feature accounting, account-wide model-call admission and exact server-verified readback scopes. This extends the existing connection; live acceptance remains separate from fixture tests and is recorded in the publication report.
+
 | Area | Implemented and fixture-testable | External completion still required |
 | --- | --- | --- |
 | Bedrock | October 19: applied quota 400,000 TPM / 20 RPM; console JSON and corrected hosted diagnostic passed (110 hosted tokens). A private chat survived reload and a CAD 0 itinerary preview passed validation. Worker redirects, bounded answer formatting and the receipt data-instance prompt are corrected. | Keep feature evidence scoped: confirm receipt images, full tool-proposal journeys and wider input/error cases individually. A connection check or one successful preview does not certify every workflow. |

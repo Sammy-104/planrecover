@@ -64,6 +64,9 @@ try{
   assert.equal(after.version,before.version);assert.deepEqual(after.events,before.events);assert.deepEqual(after.receipts,before.receipts);
   const reopened=await decoded(await routes.receipt.GET(request(`/api/receipt?draftId=${uploaded.draft.id}`)));
   assert.deepEqual(reopened.draft.sourceFacts,uploaded.draft.sourceFacts);
+  assert.equal(database.sqlite.prepare("SELECT count(*) n FROM bedrock_operations WHERE feature='receipt-image' AND state='succeeded'").get().n,1);
+  assert.equal(database.sqlite.prepare('SELECT total_tokens FROM bedrock_invocations').get().total_tokens,80);
+  assert.equal(database.sqlite.prepare("SELECT count(*) n FROM bedrock_workflow_evidence WHERE scope='saved-image-receipt-readback'").get().n,1);
  });
  await check('Bedrock requests a flat receipt instance instead of echoing a JSON Schema',async({repository,state})=>{
   configured();let calls=0;

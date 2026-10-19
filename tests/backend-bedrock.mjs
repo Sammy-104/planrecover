@@ -370,6 +370,54 @@ await check('Malformed responses, HTML, incomplete model output and model tool c
   }))));
 });
 
+await check('Agent usage requires coherent input, output and total counts within the configured output cap', async () => {
+  const input={system:'Read only',prompt:'Answer only',tools:[{name:'preview',description:'Read only preview',inputSchema:{type:'object'}}],execute:async()=>({})};
+  for(const usage of [{totalTokens:30},{inputTokens:20,outputTokens:10,totalTokens:31},
+    {inputTokens:20,outputTokens:1501,totalTokens:1521},{inputTokens:-1,outputTokens:10,totalTokens:9}]) {
+    let calls=0;
+    await rejects('BEDROCK_RESPONSE',()=>converseAgent(configuration(),input,{fetch:async()=>{calls++;return json(responseBody({
+      output:{message:{role:'assistant',content:[{text:'A safe answer.'}]}},usage}));}}));
+    assert.equal(calls,1);
+  }
+});
+
+await check('Slow shared admission cannot send JSON or agent HTTP requests after their absolute deadline', async () => {
+ const original=Date.now;let now=Date.UTC(2026,9,19),calls=0,tools=0,completed=0;
+ Date.now=()=>now;
+ try {
+  for(const transport of ['json','agent']) {
+   const observer={beforeInvocation:async()=>{now+=1000;return 'slow-admission';},recordUsage:async(id,usage)=>assert.deepEqual(usage,{inputTokens:0,outputTokens:0,totalTokens:0}),
+    afterInvocation:async(id,result)=>{completed++;assert.equal(result.outcome,'failed');assert.equal(result.errorCode,'BEDROCK_TIMEOUT');}};
+   const deps={observer,fetch:async()=>{calls++;return json(responseBody());}},config={...configuration(),timeoutMs:100};
+   await rejects('BEDROCK_TIMEOUT',()=>transport==='json'?converseJson(config,request(),deps):converseAgent(config,
+    {system:'Read only',prompt:'Preview',tools:[{name:'preview',description:'Preview',inputSchema:{type:'object'}}],execute:async()=>{tools++;return {};}},deps));
+  }
+  assert.equal(calls,0);assert.equal(tools,0);assert.equal(completed,2);
+ } finally {Date.now=original;}
+});
+
+await check('An agent tool that consumes the remaining deadline cannot start another tool or provider round', async () => {
+ const original=Date.now;let now=Date.UTC(2026,9,19),calls=0,tools=0;Date.now=()=>now;
+ try {
+  await rejects('BEDROCK_TIMEOUT',()=>converseAgent({...configuration(),timeoutMs:100},
+   {system:'Read only',prompt:'Preview',tools:[{name:'preview',description:'Preview',inputSchema:{type:'object'}}],execute:async()=>{tools++;now+=1000;return {};}},
+   {fetch:async()=>{calls++;return json(responseBody({stopReason:'tool_use',output:{message:{role:'assistant',content:[
+    {toolUse:{name:'preview',toolUseId:'first',input:{}}},{toolUse:{name:'preview',toolUseId:'second',input:{}}}]}}}));}}));
+  assert.equal(calls,1);assert.equal(tools,1);
+ }finally{Date.now=original;}
+});
+
+await check('A response processed after the absolute deadline retains known usage but cannot execute a tool', async () => {
+ const original=Date.now;let now=Date.UTC(2026,9,19),calls=0,tools=0,recorded=0;Date.now=()=>now;
+ try{
+  const observer={beforeInvocation:async()=> 'late-body',recordUsage:async(id,usage)=>{recorded+=usage.totalTokens;},afterInvocation:async(id,result)=>assert.equal(result.outcome,'failed')};
+  await rejects('BEDROCK_TIMEOUT',()=>converseAgent({...configuration(),timeoutMs:100},
+   {system:'Read only',prompt:'Preview',tools:[{name:'preview',description:'Preview',inputSchema:{type:'object'}}],execute:async()=>{tools++;return {};}},
+   {observer,fetch:async()=>{calls++;now+=1000;return json(responseBody({stopReason:'tool_use',output:{message:{role:'assistant',content:[{toolUse:{name:'preview',toolUseId:'late',input:{}}}]}}}));}}));
+  assert.equal(calls,1);assert.equal(tools,0);assert.equal(recorded,30);
+ }finally{Date.now=original;}
+});
+
 await check('Untrusted JSON must be an object, respect application schema and exclude prototype pollution', async () => {
   const badTexts = [
     'null', '[]',

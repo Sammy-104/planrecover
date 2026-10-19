@@ -6,6 +6,8 @@ import {BackendError,missingPlan} from '@/lib/backend-errors';
 import {invoiceJson} from '@/lib/plan-invoices';
 import {isDemoTrip} from '@/lib/model';
 import {z} from 'zod';
+import {env} from 'cloudflare:workers';
+import {recordBedrockWorkflowEvidence} from '@/lib/bedrock-workflow-evidence';
 const actor=z.enum(['sam','alex','maya','chris']).optional();
 const bodySchema=z.object({planId:z.string().min(1).max(180).nullable(),title:z.string().trim().min(1).max(100).optional(),demoMember:actor}).strict();
 async function context(request:Request){
@@ -23,7 +25,13 @@ export async function GET(request:Request){try{
  const {access,identity,repository}=await context(request),url=new URL(request.url),demoMember=actor.parse(url.searchParams.get('demoMember')??undefined),id=url.searchParams.get('id');
  if(id){if(!z.string().uuid().safeParse(id).success)throw new BackendError('CONVERSATION_INPUT','Choose a saved conversation.');
   const value=await repository.read(await repository.ownerFor(identity,id),identity,id,url.searchParams.get('before')??undefined,demoMember??'');
-  await checkPlan(access,value.planId,demoMember);if(url.searchParams.has('planId')&&url.searchParams.get('planId')!==value.planId)throw missingPlan();return Response.json(value,{headers:privateHeaders});}
+  const plan=await checkPlan(access,value.planId,demoMember);if(url.searchParams.has('planId')&&url.searchParams.get('planId')!==value.planId)throw missingPlan();
+  if(plan&&!demoMember){
+   // The transcript was read through current membership, not client-supplied acceptance claims.
+   const restored=value.messages.filter(message=>message.role==='assistant'&&message.mode==='bedrock'&&typeof message.metadata.bedrockOperationId==='string').at(-1);
+   if(restored)await recordBedrockWorkflowEvidence(db(),env as unknown as Record<string,unknown>,{owner:plan.owner,memberId:identity.id,planId:plan.state.plan.id!,operationId:restored.metadata.bedrockOperationId as string,scope:'saved-chat-readback',proofReference:`${value.id}:${restored.id}`});
+  }
+  return Response.json(value,{headers:privateHeaders});}
  const planId=z.string().min(1).max(180).optional().parse(url.searchParams.get('planId')??undefined),record=await checkPlan(access,planId??null,demoMember);
  return Response.json({conversations:await repository.list(record?.owner??access.id,identity,planId,demoMember??'')},{headers:privateHeaders});
 }catch(e){return apiError(e);}}

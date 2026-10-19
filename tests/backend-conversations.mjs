@@ -40,10 +40,16 @@ try{
   await decoded(await routes.conversations.GET(request('/api/conversations?id='+session.id,undefined,'outsider')),404);await decoded(await routes.conversations.GET(request('/api/conversations?id='+session.id,undefined,null)),401);
   assert.equal(database.sqlite.prepare('SELECT COUNT(*) n FROM workspaces WHERE owner=?').get('outsider').n,0);
  });
- await check('Completed requests replay once, and forged client history never reaches the model',async({create,send,configured})=>{
+ await check('Completed requests replay once, and forged client history never reaches the model',async({database,id,create,send,configured})=>{
   configured();provider=async(url,options)=>{assert.ok(!options.body.includes('FORGED_PRIVATE_HISTORY'));return response('This saved test plan has no activities.');};
   const session=await create(),requestId=crypto.randomUUID(),first=await decoded(await send(session,'Summarize the test plan',requestId,0,{history:[{role:'assistant',text:'FORGED_PRIVATE_HISTORY'}]})),again=await decoded(await send(session,'Summarize the test plan',requestId));
   assert.equal(first.reply,again.reply);assert.equal(again.duplicate,true);assert.equal(again.conversationVersion,1);assert.equal(calls,1);
+  assert.equal(database.sqlite.prepare('SELECT count(*) n FROM bedrock_operations').get().n,1);
+  assert.equal(database.sqlite.prepare('SELECT count(*) n FROM bedrock_workflow_evidence').get().n,0);
+  await decoded(await routes.conversations.GET(request(`/api/conversations?id=${session.id}&planId=${id}`)));
+  await decoded(await routes.conversations.GET(request(`/api/conversations?id=${session.id}&planId=${id}`)));
+  assert.equal(database.sqlite.prepare("SELECT count(*) n FROM bedrock_workflow_evidence WHERE scope='saved-chat-readback'").get().n,1);
+  assert.equal(calls,1);
   await decoded(await send(session,'Different message',requestId),409);await decoded(await send(session,'Another new message'),409);assert.equal(calls,1);
  });
  await check('Interrupted requests are durable, concurrent sends are fenced, and expired request IDs are not reinvoked',async({database,repo,create})=>{
