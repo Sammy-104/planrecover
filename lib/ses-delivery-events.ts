@@ -35,7 +35,7 @@ export async function authenticateSesEnvelope(raw:string,config:EventConfig,opti
  if(fields.some(field=>typeof envelope[field]!=='string'||String(envelope[field]).length>32000))throw denied();
  const canonical=fields.map(field=>`${field}\n${envelope[field]}\n`).join('');
  let pem=certCache.get(certUrl.href);if(!pem||pem.until<=now){
-  let response:Response;try{response=await(options.fetch??fetch)(certUrl.href,{redirect:'error',signal:AbortSignal.timeout(5000)});}catch{throw new BackendError('SES_EVENT_CERTIFICATE','SES signature verification is temporarily unavailable.',503);}
+  let response:Response;try{response=await(options.fetch??fetch)(certUrl.href,{redirect:'manual',signal:AbortSignal.timeout(5000)});}catch{throw new BackendError('SES_EVENT_CERTIFICATE','SES signature verification is temporarily unavailable.',503);}
   if(!response.ok)throw new BackendError('SES_EVENT_CERTIFICATE','SES signature verification is temporarily unavailable.',503);
   const value=await notificationText(response.body,12000);pem={pem:value,until:now+3600000};if(certCache.size>=16)certCache.delete(certCache.keys().next().value!);certCache.set(certUrl.href,pem);
  }

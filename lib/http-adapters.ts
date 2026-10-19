@@ -12,6 +12,6 @@ export async function boundedProviderJson(response:Response,maxBytes=65536){if(!
 }
 export async function providerPost(config:{origin:string;token:string},path:string,body:unknown,idempotencyKey:string,fetcher:typeof fetch=fetch){
  if(!/^\/[a-z][a-z/-]*$/.test(path)||JSON.stringify(body).length>32000)throw new BackendError('ADAPTER_INPUT','The provider request is invalid.');
- try{return await boundedProviderJson(await fetcher(config.origin+path,{method:'POST',redirect:'error',signal:AbortSignal.timeout(12000),headers:{Authorization:`Bearer ${config.token}`,'Content-Type':'application/json','Idempotency-Key':idempotencyKey},body:JSON.stringify(body)}));}
+ try{return await boundedProviderJson(await fetcher(config.origin+path,{method:'POST',redirect:'manual',signal:AbortSignal.timeout(12000),headers:{Authorization:`Bearer ${config.token}`,'Content-Type':'application/json','Idempotency-Key':idempotencyKey},body:JSON.stringify(body)}));}
  catch(error){if(error instanceof BackendError)throw error;throw new BackendError('ADAPTER_UNCERTAIN','The provider result is uncertain. Keep the same request ID when reviewing or retrying.',503);}
 }

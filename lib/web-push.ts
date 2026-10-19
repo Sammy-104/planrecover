@@ -78,7 +78,7 @@ export async function runWebPushReminderJobs(database:D1Database,config:WebPushC
      if(!reserved.meta.changes){deviceFailed++;continue;}
      const current=await database.prepare(`SELECT id FROM reminder_jobs WHERE id=? AND lease_token=? AND lease_until>? AND status='processing' AND ${deliveryFence} AND ${optIn} AND EXISTS(SELECT 1 FROM web_push_subscriptions WHERE id=? AND version=? AND status='active' AND (expires_at IS NULL OR expires_at>?))`).bind(job.id,token,options.now??Date.now(),row.id,row.version,options.now??Date.now()).first();
      if(!current){await database.prepare("UPDATE web_push_attempts SET status='cancelled',reason='source-changed',updated=? WHERE id=? AND status='sending'").bind(time,id).run();deviceFailed++;continue;}
-     dispatched=true;const response=await(options.fetch??fetch)(subscription.endpoint,{...payload,body:payload.body as BodyInit,redirect:'error',signal:AbortSignal.timeout(8000)});await response.body?.cancel();
+     dispatched=true;const response=await(options.fetch??fetch)(subscription.endpoint,{...payload,body:payload.body as BodyInit,redirect:'manual',signal:AbortSignal.timeout(8000)});await response.body?.cancel();
      const successful=response.status===201||response.status===202,expired=response.status===404||response.status===410;
      const definitive=successful||expired||[400,401,403,413,429].includes(response.status),status=successful?'accepted':expired?'expired':definitive?'rejected':'uncertain';
      const commands=[database.prepare("UPDATE web_push_attempts SET status=?,reason=?,updated=? WHERE id=? AND status='sending'").bind(status,successful?'push-service-accepted':expired?'subscription-expired':definitive?'provider-rejected':'provider-result-uncertain',time,id)];

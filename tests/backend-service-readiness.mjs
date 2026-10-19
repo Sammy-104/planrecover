@@ -94,6 +94,24 @@ try{
   const release=await acquireAiLease(t.database,identity.id,'plan-draft');await release();
   globalThis.readinessTestEnv.AWS_BEARER_TOKEN_BEDROCK='changed-private-secret';assert.equal((await decoded(await t.get())).services.bedrock.verification,'stale');assert.equal(calls,1);
  });
+ await check('Owner diagnostics retain only allowlisted upstream status and exception and replay without another call',async t=>{
+  provider=async()=>new Response('private-provider-body',{status:503,headers:{'x-amzn-errortype':'ServiceUnavailableException'}});
+  const body=input(),failed=await decoded(await t.post(body));assert.equal(failed.check.outcome,'unavailable');
+  assert.deepEqual(failed.check.diagnostic,{stage:'headers',upstreamStatus:503,awsException:'ServiceUnavailableException',networkErrorName:null,networkErrorCode:null});
+  assert.deepEqual((await decoded(await t.post(body))).check,failed.check);assert.equal(calls,1);noSecrets(failed);
+  const saved=await t.database.prepare("SELECT response FROM adapter_operations WHERE provider='bedrock-readiness'").first();noSecrets(saved);assert.deepEqual(JSON.parse(saved.response).diagnostic,failed.check.diagnostic);
+ });
+ await check('Network diagnostics omit messages and unknown error values while keeping the fixed failure stage',async t=>{
+  provider=async()=>{const error=new TypeError('private-provider-body fixture-sensitive-bedrock-key');error.code='ENOTFOUND';throw error;};
+  const failed=await decoded(await t.post());assert.equal(failed.check.outcome,'unavailable');
+  assert.deepEqual(failed.check.diagnostic,{stage:'request',upstreamStatus:null,awsException:null,networkErrorName:'TypeError',networkErrorCode:'ENOTFOUND'});noSecrets(failed);
+  const saved=await t.database.prepare("SELECT response FROM adapter_operations WHERE provider='bedrock-readiness'").first();noSecrets(saved);
+ });
+ await check('Unknown upstream exception headers cannot enter saved readiness diagnostics',async t=>{
+  provider=async()=>new Response('private-provider-body',{status:503,headers:{'x-amzn-errortype':'fixture-sensitive-bedrock-key'}});
+  const failed=await decoded(await t.post());assert.equal(failed.check.diagnostic.awsException,null);noSecrets(failed);
+  noSecrets(await t.database.prepare("SELECT response FROM adapter_operations WHERE provider='bedrock-readiness'").first());
+ });
  await check('Concurrent, rapid repeated and exhausted shared AI budgets cannot trigger additional diagnostic calls',async t=>{
   let enter,complete;const entered=new Promise(resolve=>{enter=resolve;});provider=async()=>{enter();return new Promise(resolve=>{complete=resolve;});};
   const body=input(),first=t.post(body);await entered;

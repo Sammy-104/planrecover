@@ -29,7 +29,7 @@ export async function relayPayPal(request,env,fetcher=fetch,{bodyTimeoutMs=10000
  catch(error){return reply(error instanceof BodyError?error.status:400,'Invalid delivery');}
  const headers=new Headers({'Content-Type':'application/json','OAI-Sites-Authorization':`Bearer ${env.PLANRECOVER_SITE_SERVICE_TOKEN}`});for(const name of SIGNATURE_HEADERS)headers.set(name,request.headers.get(name));
  try{
-  const response=await fetcher(TARGET,{method:'POST',headers,body:bytes,redirect:'error',signal:AbortSignal.timeout(forwardTimeoutMs)});
+  const response=await fetcher(TARGET,{method:'POST',headers,body:bytes,redirect:'manual',signal:AbortSignal.timeout(forwardTimeoutMs)});
   if(!response.ok){void response.body?.cancel().catch(()=>{});return [400,409,413].includes(response.status)?reply(response.status,'Delivery rejected'):reply(503,'Delivery not accepted',true);}
   if(!jsonType(response.headers)){void response.body?.cancel().catch(()=>{});return reply(503,'Delivery not accepted',true);}
   const ack=JSON.parse(new TextDecoder().decode(await limitedBody(response.body,8192,bodyTimeoutMs)));

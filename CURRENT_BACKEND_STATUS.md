@@ -1,6 +1,12 @@
-# Current implementation and readiness — October 18, 2026
+# Current implementation and readiness — October 19, 2026
 
 The current scope is [CURRENT_SCOPE.md](docs/CURRENT_SCOPE.md). Earlier milestone counts and four-tool claims are historical. The current source has ten review-oriented MCP tools, persisted workflows, receipt revisions and policy-backed refunds.
+
+## October 19 Bedrock follow-up
+
+AWS now shows an applied Canada Central Nova Lite cross-region quota of 400,000 tokens/minute and 20 requests/minute. The existing Canadian application inference profile is Active. The current Free plan, $120 applicable credits and April 14, 2027 access end date were checked before testing. One synthetic AWS console request returned valid JSON using 17 input and 6 output tokens.
+
+The pre-fix hosted check failed before inference. A local real Worker reproduction identified unsupported `redirect: 'error'` as the connection bug. Affected adapters now use manual redirect handling and continue rejecting redirect responses, without forwarding credentials. Bedrock failures retain only allowlisted connection stage/status metadata for owner inspection. Hosted checks and feature acceptance remain distinct from this console and offline evidence; inspect the saved Service readiness result and the October 19 verification report. See [the connection fix](docs/BEDROCK_CONNECTION_FIX_2026-10-19.md).
 
 ## Audit corrections implemented
 

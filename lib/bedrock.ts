@@ -28,12 +28,63 @@ type BedrockErrorCode = 'BEDROCK_CONFIG' | 'BEDROCK_INPUT' | 'BEDROCK_AUTH'
   | 'BEDROCK_MODEL' | 'BEDROCK_THROTTLED' | 'BEDROCK_TIMEOUT' | 'BEDROCK_UNAVAILABLE'
   | 'BEDROCK_RESPONSE' | 'BEDROCK_OUTPUT' | 'BEDROCK_BLOCKED';
 
+export const BEDROCK_DIAGNOSTIC_STAGES = ['request', 'headers', 'body', 'validation'] as const;
+export const BEDROCK_AWS_EXCEPTIONS = ['AccessDeniedException', 'ResourceNotFoundException',
+  'ThrottlingException', 'ServiceQuotaExceededException', 'ValidationException', 'ModelTimeoutException',
+  'InternalServerException', 'ServiceUnavailableException', 'ModelErrorException', 'ModelNotReadyException'] as const;
+export const BEDROCK_NETWORK_ERROR_NAMES = ['TypeError', 'NetworkError', 'AbortError', 'TimeoutError'] as const;
+export const BEDROCK_NETWORK_ERROR_CODES = ['ENOTFOUND', 'EAI_AGAIN', 'ECONNRESET', 'ECONNREFUSED',
+  'ECONNABORTED', 'ETIMEDOUT', 'EHOSTUNREACH', 'ENETUNREACH', 'EPIPE', 'UND_ERR_CONNECT_TIMEOUT',
+  'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT', 'UND_ERR_SOCKET', 'CERT_HAS_EXPIRED',
+  'UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'DEPTH_ZERO_SELF_SIGNED_CERT', 'ERR_TLS_CERT_ALTNAME_INVALID'] as const;
+export type BedrockDiagnostic = {
+  stage: typeof BEDROCK_DIAGNOSTIC_STAGES[number];
+  upstreamStatus: number | null;
+  awsException: typeof BEDROCK_AWS_EXCEPTIONS[number] | null;
+  networkErrorName: typeof BEDROCK_NETWORK_ERROR_NAMES[number] | null;
+  networkErrorCode: typeof BEDROCK_NETWORK_ERROR_CODES[number] | null;
+};
+
+function allowed<T extends readonly string[]>(value: unknown, values: T): T[number] | null {
+  return typeof value === 'string' && values.some(candidate => candidate === value) ? value as T[number] : null;
+}
+function ownValue(value: unknown, key: string): unknown {
+  try {
+    if (value === null || typeof value !== 'object') return undefined;
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    return descriptor && 'value' in descriptor ? descriptor.value : undefined;
+  } catch { return undefined; }
+}
+function safeDiagnostic(value: unknown): BedrockDiagnostic | undefined {
+  const stage = allowed(ownValue(value, 'stage'), BEDROCK_DIAGNOSTIC_STAGES);
+  if (!stage) return undefined;
+  const status = ownValue(value, 'upstreamStatus');
+  return { stage, upstreamStatus: typeof status === 'number' && Number.isInteger(status) && status >= 100 && status <= 599 ? status : null,
+    awsException: allowed(ownValue(value, 'awsException'), BEDROCK_AWS_EXCEPTIONS),
+    networkErrorName: allowed(ownValue(value, 'networkErrorName'), BEDROCK_NETWORK_ERROR_NAMES),
+    networkErrorCode: allowed(ownValue(value, 'networkErrorCode'), BEDROCK_NETWORK_ERROR_CODES) };
+}
+function networkDiagnostic(error: unknown) {
+  let name = ownValue(error, 'name');
+  // Error names usually live on the prototype. Never invoke provider-controlled getters.
+  if (name === undefined) { try { name = ownValue(Object.getPrototypeOf(error), 'name'); } catch {} }
+  return { networkErrorName: allowed(name, BEDROCK_NETWORK_ERROR_NAMES),
+    networkErrorCode: allowed(ownValue(error, 'code'), BEDROCK_NETWORK_ERROR_CODES)
+      ?? allowed(ownValue(ownValue(error, 'cause'), 'code'), BEDROCK_NETWORK_ERROR_CODES) };
+}
+function attachDiagnostic(error: BedrockError, diagnostic: BedrockDiagnostic, cause?: unknown) {
+  error.diagnostic = safeDiagnostic({ ...diagnostic, ...(cause === undefined ? {} : networkDiagnostic(cause)) });
+  return error;
+}
+
 export class BedrockError extends BackendError {
   retryable: boolean;
-  constructor(code: BedrockErrorCode, message: string, status = 502, retryable = false) {
+  diagnostic?: BedrockDiagnostic;
+  constructor(code: BedrockErrorCode, message: string, status = 502, retryable = false, diagnostic?: BedrockDiagnostic) {
     super(code, message, status);
     this.name = 'BedrockError';
     this.retryable = retryable;
+    if (diagnostic) this.diagnostic = safeDiagnostic(diagnostic);
   }
 }
 
@@ -130,10 +181,13 @@ export async function converseAgent(configuration:BedrockConfig,input:{system:st
  const config=validateConfig(configuration);if(input.tools.length>8||!input.tools.length||input.prompt.length>46000||input.system.length>12000)throw new BedrockError('BEDROCK_INPUT','The agent request is too large.',400);
  const names=new Set(input.tools.map(t=>t.name));const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),Math.min(45000,config.timeoutMs*2));
  const messages:unknown[]=[{role:'user',content:[{text:input.prompt}]}],results:{name:string;result:unknown}[]=[];let calls=0,totalTokens=0;
+ let diagnostic:BedrockDiagnostic={stage:'request',upstreamStatus:null,awsException:null,networkErrorName:null,networkErrorCode:null};
  try{for(let round=0;round<3;round++){
-  const response=await (dependencies.fetch??fetch)(`https://bedrock-runtime.${config.region}.amazonaws.com/model/${encodeURIComponent(config.modelId)}/converse`,{method:'POST',redirect:'error',signal:controller.signal,
+  diagnostic={stage:'request',upstreamStatus:null,awsException:null,networkErrorName:null,networkErrorCode:null};
+  const response=await (dependencies.fetch??fetch)(`https://bedrock-runtime.${config.region}.amazonaws.com/model/${encodeURIComponent(config.modelId)}/converse`,{method:'POST',redirect:'manual',signal:controller.signal,
    headers:{Authorization:`Bearer ${config.apiKey}`,'Content-Type':'application/json',Accept:'application/json'},body:JSON.stringify({system:[{text:input.system}],messages,inferenceConfig:{maxTokens:Math.min(config.maxTokens,1500)},toolConfig:{tools:input.tools.map(t=>({toolSpec:{name:t.name,description:t.description,inputSchema:{json:t.inputSchema}}})),toolChoice:{auto:{}}}})});
-  if(!response.ok)throw providerError(response.status);const data=await readBounded(response,controller.signal);
+  diagnostic.stage='headers';diagnostic.upstreamStatus=response.status;diagnostic.awsException=allowed(response.headers.get('x-amzn-errortype'),BEDROCK_AWS_EXCEPTIONS);
+  if(!response.ok)throw providerError(response.status);diagnostic.stage='body';const data=await readBounded(response,controller.signal);diagnostic.stage='validation';
   if(!record(data)||!record(data.output)||!record(data.output.message)||data.output.message.role!=='assistant'||!Array.isArray(data.output.message.content)||data.output.message.content.length>8)throw new BedrockError('BEDROCK_RESPONSE','Invalid agent response.');
   const usage=data.usage;if(!record(usage)||!Number.isSafeInteger(usage.totalTokens)||Number(usage.totalTokens)<0)throw new BedrockError('BEDROCK_RESPONSE','Invalid agent usage.');totalTokens+=Number(usage.totalTokens);if(totalTokens>24000)throw new BedrockError('BEDROCK_OUTPUT','Agent request budget reached.');
   const content=data.output.message.content;
@@ -151,7 +205,7 @@ export async function converseAgent(configuration:BedrockConfig,input:{system:st
   if(!blocks.length)throw new BedrockError('BEDROCK_OUTPUT','Missing tool call.');messages.push({role:'user',content:blocks});
  }
  throw new BedrockError('BEDROCK_OUTPUT','The agent could not finish.');
- }catch(error){if(error instanceof BedrockError)throw error;throw new BedrockError('BEDROCK_UNAVAILABLE','The planning agent is temporarily unavailable.',503);}finally{clearTimeout(timeout);}
+ }catch(error){if(error instanceof BedrockError)throw attachDiagnostic(error,diagnostic);throw attachDiagnostic(new BedrockError('BEDROCK_UNAVAILABLE','The planning agent is temporarily unavailable.',503),diagnostic,error);}finally{clearTimeout(timeout);}
 }
 
 async function readBounded(response: Response, signal: AbortSignal) {
@@ -248,21 +302,25 @@ export async function converseJson<T>(configuration: BedrockConfig, request: Bed
   const config = validateConfig(configuration);
   const body = makeBody(request, config.maxTokens);
   const controller = new AbortController();
+  const diagnostic: BedrockDiagnostic = { stage: 'request', upstreamStatus: null, awsException: null, networkErrorName: null, networkErrorCode: null };
   let timeout: ReturnType<typeof setTimeout> | undefined;
   const expiration = new Promise<never>((_, reject) => {
     timeout = setTimeout(() => {
       controller.abort();
-      reject(new BedrockError('BEDROCK_TIMEOUT', 'Amazon Bedrock did not respond in time. Try again later.', 504, true));
+      reject(new BedrockError('BEDROCK_TIMEOUT', 'Amazon Bedrock did not respond in time. Try again later.', 504, true, diagnostic));
     }, config.timeoutMs);
   });
   const execute = async () => {
     try {
       const response = await (dependencies.fetch ?? fetch)(
         `https://bedrock-runtime.${config.region}.amazonaws.com/model/${encodeURIComponent(config.modelId)}/converse`, {
-          method: 'POST', redirect: 'error',
+          method: 'POST', redirect: 'manual',
           headers: { Authorization: `Bearer ${config.apiKey}`, 'Content-Type': 'application/json', Accept: 'application/json' },
           body, signal: controller.signal,
         });
+      diagnostic.stage = 'headers';
+      diagnostic.upstreamStatus = response.status;
+      diagnostic.awsException = allowed(response.headers.get('x-amzn-errortype'), BEDROCK_AWS_EXCEPTIONS);
       if (!response.ok) {
         await response.body?.cancel().catch(() => undefined);
         throw providerError(response.status);
@@ -271,12 +329,15 @@ export async function converseJson<T>(configuration: BedrockConfig, request: Bed
         await response.body?.cancel().catch(() => undefined);
         throw new BedrockError('BEDROCK_RESPONSE', 'Amazon Bedrock returned an unsupported response.');
       }
-      return result(await readBounded(response, controller.signal), request, config);
+      diagnostic.stage = 'body';
+      const data = await readBounded(response, controller.signal);
+      diagnostic.stage = 'validation';
+      return result(data, request, config);
     } catch (error) {
-      if (error instanceof BedrockError) throw error;
-      if (controller.signal.aborted) throw new BedrockError('BEDROCK_TIMEOUT', 'Amazon Bedrock did not respond in time. Try again later.', 504, true);
+      if (error instanceof BedrockError) throw attachDiagnostic(error, diagnostic);
+      if (controller.signal.aborted) throw attachDiagnostic(new BedrockError('BEDROCK_TIMEOUT', 'Amazon Bedrock did not respond in time. Try again later.', 504, true), diagnostic, error);
       // Provider/network/validator messages may contain secrets or untrusted output.
-      throw new BedrockError('BEDROCK_UNAVAILABLE', 'Amazon Bedrock is temporarily unavailable. Try again later.', 503, true);
+      throw attachDiagnostic(new BedrockError('BEDROCK_UNAVAILABLE', 'Amazon Bedrock is temporarily unavailable. Try again later.', 503, true), diagnostic, error);
     }
   };
   try { return await Promise.race([execute(), expiration]); }

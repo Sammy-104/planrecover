@@ -45,7 +45,7 @@ export async function sendSesEmail(config:SesEmailConfig,input:{destination:stri
  headers.Authorization=`AWS4-HMAC-SHA256 Credential=${config.accessKeyId}/${scope}, SignedHeaders=${signed}, Signature=${signature}`;
  if(!await options.beforeSend())throw new SesEmailError('not-sent',false,'ses-source-changed');
  try{
-  const response=await (options.fetch??fetch)(`https://${host}${path}`,{method:'POST',redirect:'error',signal:AbortSignal.timeout(12000),headers,body}),value=await responseJson(response);
+  const response=await (options.fetch??fetch)(`https://${host}${path}`,{method:'POST',redirect:'manual',signal:AbortSignal.timeout(12000),headers,body}),value=await responseJson(response);
   if(response.status===200&&typeof value.MessageId==='string'&&/^[A-Za-z0-9._:-]{1,180}$/.test(value.MessageId))return {messageId:value.MessageId};
   // Only documented, parsed rejection responses establish nonacceptance.
   const raw=response.headers.get('x-amzn-errortype')??value.__type??value.code,code=typeof raw==='string'?raw.split('#').at(-1)!.split(':')[0]:'';

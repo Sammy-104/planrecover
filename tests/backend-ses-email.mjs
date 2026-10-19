@@ -36,7 +36,7 @@ await check('SES config is explicit, independent of Bedrock, region-pinned and s
 });
 
 await check('Real migrated attempt is persisted before correctly signed SES v2 email and acceptance is safely replayed',async({database})=>{
- let calls=0;const fetcher=async(url,init)=>{calls++;assert.equal(url,'https://email.ca-central-1.amazonaws.com/v2/email/outbound-emails');assert.equal(init.method,'POST');assert.equal(init.redirect,'error');assert.equal(init.headers['Idempotency-Key'],undefined);assert.equal(attempts(database)[0].status,'sending');
+ let calls=0;const fetcher=async(url,init)=>{calls++;assert.equal(url,'https://email.ca-central-1.amazonaws.com/v2/email/outbound-emails');assert.equal(init.method,'POST');assert.equal(init.redirect,'manual');assert.equal(init.headers['Idempotency-Key'],undefined);assert.equal(attempts(database)[0].status,'sending');
   const payload=JSON.parse(init.body);assert.deepEqual(payload.Destination,{ToAddresses:['alice@example.test']});assert.equal(payload.FromEmailAddress,'reminders@example.test');assert.equal(payload.Content.Simple.Subject.Data,'Pack rain gear');assert.equal(payload.ConfigurationSetName,'reminder-events');assert.match(payload.EmailTags[0].Value,/^ses-[a-f0-9]{64}-1$/);
   const headers=Object.fromEntries(Object.entries(init.headers).filter(([key])=>key!=='Authorization')),names=Object.keys(headers).sort(),canonical=names.map(key=>key+':'+headers[key].trim()+'\n').join(''),hash=value=>createHash('sha256').update(value).digest('hex'),hmac=(key,value)=>createHmac('sha256',key).update(value).digest();
   const day='20270404',date='20270404T130000Z',scope=day+'/ca-central-1/ses/aws4_request',request='POST\n/v2/email/outbound-emails\n\n'+canonical+'\n'+names.join(';')+'\n'+hash(init.body),key=hmac(hmac(hmac(hmac('AWS4'+settings.AWS_SES_SECRET_ACCESS_KEY,day),'ca-central-1'),'ses'),'aws4_request'),signature=hmac(key,'AWS4-HMAC-SHA256\n'+date+'\n'+scope+'\n'+hash(request)).toString('hex');
@@ -66,7 +66,7 @@ await check('Enabling SES cannot replay an earlier generic email attempt with un
  const result=await run(database,async()=>{calls++;return accepted();},now+61000);assert.equal(calls,1);assert.equal(result.manualReview,1);assert.equal(job(database).last_error,'ses-prior-provider-attempt-needs-review');assert.equal(attempts(database).length,0);
 });
 
-for(const [name,response] of [['malformed success',()=>Response.json({})],['unrecognized provider failure',()=>Response.json({message:'private upstream detail'},{status:500})],['oversized response',()=>new Response('x'.repeat(17000),{status:200})]])await check(name+' retains uncertainty instead of resending',async({database})=>{
+for(const [name,response] of [['malformed success',()=>Response.json({})],['unrecognized provider failure',()=>Response.json({message:'private upstream detail'},{status:500})],['oversized response',()=>new Response('x'.repeat(17000),{status:200})],...[301,302,303,307,308].map(status=>['redirect '+status,()=>Response.json({MessageId:'SES-fixture-message-1'},{status,headers:{Location:'https://redirect-target.invalid/'}})])])await check(name+' retains uncertainty instead of resending',async({database})=>{
  let calls=0;const fetcher=async()=>{calls++;return response();};await run(database,fetcher);await run(database,fetcher,now+61000);assert.equal(calls,1);assert.equal(attempts(database)[0].status,'uncertain');assert.ok(!JSON.stringify(attempts(database)).includes('private upstream detail'));
 });
 

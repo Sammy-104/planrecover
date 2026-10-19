@@ -4,7 +4,7 @@ The latest batch implements work that does not require Bedrock and carries forwa
 
 | Area | Implemented and fixture-testable | External completion still required |
 | --- | --- | --- |
-| Bedrock | Existing owner-only GET and explicit bounded synthetic diagnostic remain available; this batch makes no model calls. | Last observed applied Nova Lite quota was0; AWS request400,000 TPM was under review. Recheck access before inference and feature acceptance. |
+| Bedrock | Canadian application profile and owner diagnostic exist. October 19: applied quota 400,000 TPM / 20 RPM; one console request returned validated synthetic JSON (17 input / 6 output tokens). Worker redirect compatibility is corrected, with safe owner diagnostics. | Verify the corrected hosted deployment, then chat, reviewed drafts, tool proposals and receipt extraction individually. Console success alone does not prove the app's credential path or complete workflows. |
 | SES email | Durable SES sends, signed delivery outcomes, recipient suppression and owner-scoped evidence. Authorized follow-up setup created restricted private credentials; sender Verified; sending false. | Controlled self-recipient send, signed callback configuration, delivery outcome and unattended evidence. |
 | Browser push | Scoped subscriptions, VAPID configuration, encrypted delivery, device expiry/revocation and durable attempt outcomes. Disabled by default. | Dedicated private VAPID setup, consented subscription and real device delivery. |
 | Operations alerts | Durable deduped issue/recovery episodes, coarse receiver contract, bounded known-rejection retries and manual review after ambiguity. Disabled by default. | Approved receiver, private settings and observed external on-call delivery/recovery. |

@@ -1,6 +1,6 @@
 import {z} from 'zod';
 import {BackendError,conflict,forbidden} from './backend-errors.ts';
-import {bedrockConfig,converseJson,type BedrockConfig} from './bedrock.ts';
+import {bedrockConfig,converseJson,BedrockError,BEDROCK_DIAGNOSTIC_STAGES,BEDROCK_AWS_EXCEPTIONS,BEDROCK_NETWORK_ERROR_NAMES,BEDROCK_NETWORK_ERROR_CODES,type BedrockConfig} from './bedrock.ts';
 import {acquireAiLease} from './ai-usage.ts';
 import {providerConfig} from './http-adapters.ts';
 import {sesEmailConfig} from './ses-email.ts';
@@ -15,11 +15,12 @@ type Verification='unverified'|'running'|'passed'|'failed'|'interrupted'|'stale'
 const provider='bedrock-readiness',kind='synthetic-json-check',prefix='readiness-bedrock-';
 const outcomes=['passed','access-denied','model-unavailable','rate-limited','timed-out','invalid-response','unavailable','interrupted','authorization-changed'] as const;
 const usageSchema=z.object({inputTokens:z.number().int().nonnegative().max(1_000_000),outputTokens:z.number().int().min(0).max(128),totalTokens:z.number().int().nonnegative().max(1_000_000)}).strict();
-const storedResult=z.object({version:z.literal(1),outcome:z.enum(outcomes),usage:usageSchema.nullable()}).strict();
+const diagnosticSchema=z.object({stage:z.enum(BEDROCK_DIAGNOSTIC_STAGES),upstreamStatus:z.number().int().min(100).max(599).nullable(),awsException:z.enum(BEDROCK_AWS_EXCEPTIONS).nullable(),networkErrorName:z.enum(BEDROCK_NETWORK_ERROR_NAMES).nullable(),networkErrorCode:z.enum(BEDROCK_NETWORK_ERROR_CODES).nullable()}).strict();
+const storedResult=z.object({version:z.literal(1),outcome:z.enum(outcomes),usage:usageSchema.nullable(),diagnostic:diagnosticSchema.optional()}).strict();
 export const readinessCheckRequest=z.object({action:z.literal('check-bedrock'),requestId:z.string().uuid(),confirm:z.literal(true)}).strict();
 type CheckInput=z.infer<typeof readinessCheckRequest>;
 type Operation={id:string;owner:string;plan_id:string;member_id:string;provider:string;kind:string;request:string;response:string|null;status:string;lease_token:string|null;lease_until:number;created:string;updated:string};
-type Check={id:string;service:'bedrock';scope:'synthetic-json-converse';status:'running'|'passed'|'failed'|'interrupted';outcome:typeof outcomes[number]|null;startedAt:string;completedAt:string|null;usage:z.infer<typeof usageSchema>|null};
+type Check={id:string;service:'bedrock';scope:'synthetic-json-converse';status:'running'|'passed'|'failed'|'interrupted';outcome:typeof outcomes[number]|null;startedAt:string;completedAt:string|null;usage:z.infer<typeof usageSchema>|null;diagnostic?:z.infer<typeof diagnosticSchema>};
 const basic=(configuration:Configuration)=>({configuration,verification:'unverified' as Verification});
 const present=(value:unknown)=>value!==undefined&&value!==null&&value!=='';
 const credential=(value:unknown,min=1,max=4096)=>typeof value==='string'&&value.length>=min&&value.length<=max&&!/[\s\x00-\x1f\x7f]/.test(value);
@@ -54,7 +55,7 @@ function checkView(row:Operation,now:number):Check{
  const running=row.status==='processing'&&row.lease_until>now,result=parsed.success?parsed.data:null;
  const status=running?'running':row.status==='completed'&&result?.outcome==='passed'?'passed':row.status==='failed'&&result?'failed':'interrupted';
  return {id:row.id.slice(prefix.length),service:'bedrock',scope:'synthetic-json-converse',status,
-  outcome:running?null:result?.outcome??'interrupted',startedAt:stamp(row.created),completedAt:running||!result?null:stamp(row.updated),usage:result?.usage??null};
+  outcome:running?null:result?.outcome??'interrupted',startedAt:stamp(row.created),completedAt:running||!result?null:stamp(row.updated),usage:result?.usage??null,...(!running&&result?.diagnostic?{diagnostic:result.diagnostic}:{})};
 }
 function failureOutcome(error:unknown):typeof outcomes[number]{
  const code=error instanceof BackendError?error.code:'';
@@ -138,14 +139,14 @@ export class ServiceReadinessService{
      AND NOT EXISTS(SELECT 1 FROM adapter_operations WHERE owner=? AND provider=? AND kind=? AND created>?)`)
     .bind(id,record.owner,planId,identity.id,provider,kind,request,token,now()+65_000,at,at,record.owner,planId,identity.id,record.owner,provider,kind,new Date(now()-60_000).toISOString()).run();
    if(!inserted.meta.changes)throw conflict();
-   let outcome:typeof outcomes[number]='unavailable',usage:z.infer<typeof usageSchema>|null=null;
+   let outcome:typeof outcomes[number]='unavailable',usage:z.infer<typeof usageSchema>|null=null,diagnostic:z.infer<typeof diagnosticSchema>|undefined;
    try{
     await this.owner(planId,identity);
     const result=await converseJson({...configured.config,maxTokens:128,timeoutMs:Math.min(8000,configured.config.timeoutMs)},
      {system:'Perform a synthetic connectivity check. Return only the JSON object {"ok":true}.',prompt:'Return {"ok":true}. No user, plan or receipt data is included.',validate:value=>z.object({ok:z.literal(true)}).strict().parse(value)},
      {fetch:dependencies.fetch});outcome='passed';usage=result.usage;
-   }catch(error){outcome=error instanceof BackendError&&['FORBIDDEN','PLAN_NOT_FOUND'].includes(error.code)?'authorization-changed':failureOutcome(error);}
-   const response=JSON.stringify({version:1,outcome,usage}),saved=await this.database.prepare("UPDATE adapter_operations SET status=?,response=?,lease_token=NULL,lease_until=0,updated=? WHERE id=? AND owner=? AND plan_id=? AND status='processing' AND lease_token=?")
+   }catch(error){outcome=error instanceof BackendError&&['FORBIDDEN','PLAN_NOT_FOUND'].includes(error.code)?'authorization-changed':failureOutcome(error);if(error instanceof BedrockError){const checked=diagnosticSchema.safeParse(error.diagnostic);if(checked.success)diagnostic=checked.data;}}
+   const response=JSON.stringify({version:1,outcome,usage,...(diagnostic?{diagnostic}:{})}),saved=await this.database.prepare("UPDATE adapter_operations SET status=?,response=?,lease_token=NULL,lease_until=0,updated=? WHERE id=? AND owner=? AND plan_id=? AND status='processing' AND lease_token=?")
     .bind(outcome==='passed'?'completed':'failed',response,new Date(now()).toISOString(),id,record.owner,planId,token).run();
    if(!saved.meta.changes)throw conflict();
    const latest=await this.operation(id);if(!latest)throw conflict();

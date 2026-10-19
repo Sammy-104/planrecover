@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { BedrockError, bedrockConfig, converseJson } from '../lib/bedrock.ts';
+import { BedrockError, bedrockConfig, converseJson, converseAgent } from '../lib/bedrock.ts';
 
 let checks = 0;
 let liveCalls = 0;
@@ -56,7 +56,7 @@ await check('Converse sends one fixed regional HTTPS request and validates JSON 
     calls += 1;
     assert.equal(url, 'https://bedrock-runtime.ca-central-1.amazonaws.com/model/amazon.fixture-model-v1%3A0/converse');
     assert.equal(init.method, 'POST');
-    assert.equal(init.redirect, 'error');
+    assert.equal(init.redirect, 'manual');
     assert.equal(init.headers.Authorization, `Bearer ${env.AWS_BEARER_TOKEN_BEDROCK}`);
     assert.ok(init.signal instanceof AbortSignal);
     const payload = JSON.parse(init.body);
@@ -133,6 +133,118 @@ await check('Authorization, quota and provider failures are sanitized and classi
   await rejects('BEDROCK_UNAVAILABLE', () => converseJson(configuration(), request(), { fetch: async () => {
     throw new Error(`${env.AWS_BEARER_TOKEN_BEDROCK} private-receipt-evidence`);
   } }), true);
+});
+
+await check('A failed AWS response records only bounded status and an exact allowlisted exception', async () => {
+  const secret = `${env.AWS_BEARER_TOKEN_BEDROCK} private-receipt-evidence https://private.invalid/secret`;
+  for (const [header, expected] of [['ServiceUnavailableException', 'ServiceUnavailableException'],
+    [secret, null], ['ServiceUnavailableException:private-receipt-evidence', null]]) {
+    let calls = 0;
+    await assert.rejects(() => converseJson(configuration(), request(), { fetch: async () => {
+      calls += 1;
+      return new Response(secret, { status: 503, headers: { 'x-amzn-errortype': header, 'x-private': secret } });
+    } }), error => {
+      assert.equal(error.code, 'BEDROCK_UNAVAILABLE'); assert.equal(error.retryable, true);
+      assert.deepEqual(error.diagnostic, { stage: 'headers', upstreamStatus: 503, awsException: expected,
+        networkErrorName: null, networkErrorCode: null });
+      for (const value of [env.AWS_BEARER_TOKEN_BEDROCK, 'private-receipt-evidence', 'private.invalid']) assert.ok(!JSON.stringify(error).includes(value));
+      return true;
+    });
+    assert.equal(calls, 1);
+  }
+});
+
+await check('Network diagnostics allow fixed names and codes without retaining messages, causes or accessors', async () => {
+  const secret = `${env.AWS_BEARER_TOKEN_BEDROCK} private-receipt-evidence`;
+  let accessorReads = 0;
+  const malicious = Object.defineProperties({}, Object.fromEntries(['name', 'code', 'cause'].map(key => [key, { get() { accessorReads += 1; throw new Error(secret); } }])));
+  const known = new TypeError(secret, { cause: Object.assign(new Error(secret), { code: 'ENOTFOUND' }) });
+  const unknown = Object.assign(new Error(secret), { name: secret, code: secret, cause: { code: secret } });
+  for (const [failure, expectedName, expectedCode] of [[known, 'TypeError', 'ENOTFOUND'], [unknown, null, null], [malicious, null, null]]) {
+    let calls = 0;
+    await assert.rejects(() => converseJson(configuration(), request(), { fetch: async () => { calls += 1; throw failure; } }), error => {
+      assert.equal(error.code, 'BEDROCK_UNAVAILABLE'); assert.equal(error.retryable, true);
+      assert.deepEqual(error.diagnostic, { stage: 'request', upstreamStatus: null, awsException: null,
+        networkErrorName: expectedName, networkErrorCode: expectedCode });
+      assert.ok(!JSON.stringify(error).includes(secret)); assert.equal(Object.hasOwn(error, 'cause'), false);
+      return true;
+    });
+    assert.equal(calls, 1);
+  }
+  assert.equal(accessorReads, 0);
+});
+
+await check('Both transports reject redirects without forwarding credentials or making a second request', async () => {
+  const agentInput = { system: 'Prepare previews only.', prompt: 'Synthetic check.', tools: [{ name: 'preview', description: 'Read', inputSchema: { type: 'object' } }], execute: async () => { throw Error('No tool execution is allowed.'); } };
+  for (const status of [301, 302, 307, 308]) {
+    for (const transport of ['json', 'agent']) {
+      let calls = 0;
+      const dependencies = { fetch: async (url, init) => {
+        calls += 1;
+        assert.match(url, /^https:\/\/bedrock-runtime\.ca-central-1\.amazonaws\.com\/model\//);
+        assert.equal(init.redirect, 'manual');
+        assert.equal(init.headers.Authorization, `Bearer ${env.AWS_BEARER_TOKEN_BEDROCK}`);
+        return new Response('private-receipt-evidence', { status, headers: { Location: 'https://credential-thief.invalid/private-receipt-evidence' } });
+      } };
+      await assert.rejects(() => transport === 'json' ? converseJson(configuration(), request(), dependencies) : converseAgent(configuration(), agentInput, dependencies), error => {
+        assert.equal(error.code, 'BEDROCK_UNAVAILABLE'); assert.equal(error.retryable, false);
+        assert.equal(error.diagnostic.stage, 'headers'); assert.equal(error.diagnostic.upstreamStatus, status);
+        assert.ok(!JSON.stringify(error).includes('credential-thief')); assert.ok(!JSON.stringify(error).includes(env.AWS_BEARER_TOKEN_BEDROCK)); return true;
+      });
+      assert.equal(calls, 1);
+    }
+  }
+});
+
+await check('Malformed successful responses and broken streams retain their distinct safe failure stages', async () => {
+  const cases = [
+    [() => new Response('private-receipt-evidence', { headers: { 'Content-Type': 'application/json' } }), 'BEDROCK_RESPONSE', 'body', null],
+    [() => json({ private: 'private-receipt-evidence' }), 'BEDROCK_RESPONSE', 'validation', null],
+    [() => new Response(new ReadableStream({ start(controller) { controller.error(Object.assign(new TypeError('private-receipt-evidence'), { code: 'ECONNRESET' })); } }),
+      { headers: { 'Content-Type': 'application/json' } }), 'BEDROCK_UNAVAILABLE', 'body', 'ECONNRESET'],
+  ];
+  for (const [response, code, stage, networkErrorCode] of cases) {
+    await assert.rejects(() => converseJson(configuration(), request(), { fetch: async () => response() }), error => {
+      assert.equal(error.code, code); assert.equal(error.diagnostic.stage, stage); assert.equal(error.diagnostic.upstreamStatus, 200);
+      assert.equal(error.diagnostic.networkErrorCode, networkErrorCode); assert.ok(!JSON.stringify(error).includes('private-receipt-evidence'));
+      return true;
+    });
+  }
+});
+
+await check('Diagnostic construction drops out-of-range, unknown and extra fields', async () => {
+  const error = new BedrockError('BEDROCK_UNAVAILABLE', 'Safe error.', 503, true, { stage: 'request', upstreamStatus: 600,
+    awsException: 'private-receipt-evidence', networkErrorName: 'private-receipt-evidence', networkErrorCode: 'private-receipt-evidence', raw: env.AWS_BEARER_TOKEN_BEDROCK });
+  assert.deepEqual(error.diagnostic, { stage: 'request', upstreamStatus: null, awsException: null, networkErrorName: null, networkErrorCode: null });
+  assert.ok(!JSON.stringify(error).includes(env.AWS_BEARER_TOKEN_BEDROCK));
+  assert.equal(new BedrockError('BEDROCK_UNAVAILABLE', 'Safe error.', 503, true, { stage: 'private-receipt-evidence' }).diagnostic, undefined);
+});
+
+await check('Agent failures expose the same safe diagnostics and clear response metadata before another round', async () => {
+  const input = { system: 'Prepare previews only.', prompt: 'Synthetic check.', tools: [{ name: 'preview', description: 'Read a preview', inputSchema: { type: 'object' } }], execute: async () => ({ requiresReview: true }) };
+  for (const [fetcher, code, expected] of [
+    [async () => new Response('private-receipt-evidence', { status: 503, headers: { 'x-amzn-errortype': 'ServiceUnavailableException' } }), 'BEDROCK_UNAVAILABLE',
+      { stage: 'headers', upstreamStatus: 503, awsException: 'ServiceUnavailableException', networkErrorName: null, networkErrorCode: null }],
+    [async () => { throw Object.assign(new TypeError('private-receipt-evidence'), { code: 'ENOTFOUND' }); }, 'BEDROCK_UNAVAILABLE',
+      { stage: 'request', upstreamStatus: null, awsException: null, networkErrorName: 'TypeError', networkErrorCode: 'ENOTFOUND' }],
+    [async () => json({ private: 'private-receipt-evidence' }), 'BEDROCK_RESPONSE',
+      { stage: 'validation', upstreamStatus: 200, awsException: null, networkErrorName: null, networkErrorCode: null }],
+  ]) {
+    let calls = 0;
+    await assert.rejects(() => converseAgent(configuration(), input, { fetch: async (...args) => { calls += 1; return fetcher(...args); } }), error => {
+      assert.equal(error.code, code); assert.equal(error.retryable, code === 'BEDROCK_UNAVAILABLE' && expected.upstreamStatus === 503);
+      assert.deepEqual(error.diagnostic, expected); assert.ok(!JSON.stringify(error).includes('private-receipt-evidence')); return true;
+    });
+    assert.equal(calls, 1);
+  }
+  let calls = 0;
+  await assert.rejects(() => converseAgent(configuration(), input, { fetch: async () => {
+    if (++calls === 1) return json(responseBody({ stopReason: 'tool_use', output: { message: { role: 'assistant', content: [{ toolUse: { toolUseId: 'fixture-tool', name: 'preview', input: {} } }] } } }));
+    throw Object.assign(new TypeError('private-receipt-evidence'), { code: 'ECONNRESET' });
+  } }), error => {
+    assert.deepEqual(error.diagnostic, { stage: 'request', upstreamStatus: null, awsException: null, networkErrorName: 'TypeError', networkErrorCode: 'ECONNRESET' }); return true;
+  });
+  assert.equal(calls, 2);
 });
 
 await check('The overall timeout covers stalled headers, ignored abort signals and stalled response bodies', async () => {
