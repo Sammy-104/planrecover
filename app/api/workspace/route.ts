@@ -9,6 +9,8 @@ import { requireReviewedReceiptDraft } from '@/lib/receipt-drafts';
 import {reviewPlanAction} from '@/lib/planning-review';
 import {prepareFrontendAction} from '@/lib/frontend-server';
 import {invoiceJson} from '@/lib/plan-invoices';
+import {applyDraftBatch,draftBatchActions} from '@/lib/draft-batch';
+import {prepareSuggestionAction} from '@/lib/suggestion-preview';
 
 export async function GET(request:Request) {
   try {
@@ -26,6 +28,7 @@ export async function POST(request:Request) {
     requireEdit(access,current);
     const parsed=parseWorkspaceMutation(await invoiceJson(request,1000000),{requireActor:!current.people});
     let action:Action={...parsed.action,actor:current.people?access.user!.id:parsed.action.actor!};
+    if(action.type==='create_trip'&&access.user)action={...action,_creatorId:access.user.id};
     if(parsed.version!==current.version)throw conflict();
     if(access.share)checkSharedAction(current,action);
     action=await prepareFrontendAction(current,action.actor,action,new URL(request.url).origin);
@@ -45,7 +48,16 @@ export async function POST(request:Request) {
       await repository.updatePreferences(current.plan.id!,access.user!,preferences,previous.version,{workspaceVersion:parsed.version,link:access.share});
       state=await loadAccess(access);
     } else {
-      const next=applyAction(current,action);
+      let next;
+      if(action.type==='add_drafts'){
+        const additions=draftBatchActions(current,action),prepared=[];
+        let preview=current;
+        for(const addition of additions){
+          if(addition.type==='add_suggestion')await prepareSuggestionAction(preview,addition,new URL(request.url).origin);
+          prepared.push(addition);preview=applyAction(preview,addition);
+        }
+        next=applyDraftBatch(current,action,prepared);
+      }else next=applyAction(current,action);
       if(action.type==='create_trip'&&access.user) {
         delete next.people; next.preferences={}; initializePeople(next,access.user);
         next.audit.forEach(entry=>{entry.actorId=access.user!.id;entry.actorName=access.user!.name;});

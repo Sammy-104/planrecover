@@ -1,0 +1,27 @@
+/* Keep the next action close, with details available on demand. */
+.planner-primary-actions{display:flex;gap:.6rem;flex-wrap:wrap;margin:0 0 1rem}
+.planner-overview{border:1px solid var(--border);border-radius:var(--radius-lg,12px);background:var(--surface,#fff);margin:0 0 1.1rem}
+.planner-overview>summary{display:flex;align-items:center;justify-content:space-between;gap:1rem;padding:.85rem 1rem;cursor:pointer;font-weight:600;list-style:none}
+.planner-overview[open]>summary{border-bottom:1px solid var(--border)}
+.planner-overview .plan-overview{padding:1rem;margin:0;gap:.8rem}
+.planner-overview .plan-overview>details,.planner-overview .plan-overview>section{min-width:0}
+.selection-toolbar{display:flex;align-items:center;flex-wrap:wrap;gap:.65rem;padding:.8rem 1rem;border:1px solid var(--border);border-radius:12px;background:var(--brand-soft,#e8f4f2);margin:.75rem 0 1rem}
+.selection-toolbar>strong,.selection-toolbar>span{margin-right:auto}
+.suggestion-select{display:flex;align-items:center;gap:.5rem;padding:.65rem 1rem;border-top:1px solid var(--border);font-size:.85rem;cursor:pointer}
+.suggestion-select input{accent-color:var(--brand,#10766f);width:1rem;height:1rem}
+.suggestion-card:has(.suggestion-select input:checked){outline:2px solid var(--brand,#10766f);outline-offset:1px}
+.batch-review-entry{padding:1rem 0;border-bottom:1px solid var(--border);display:grid;gap:.7rem}
+.batch-review-entry h3{margin:0 0 .2rem}.batch-review-entry p{font-size:.875rem;margin:.2rem 0}
+.batch-review-entry details{font-size:.85rem}.batch-review-entry details summary{cursor:pointer;font-weight:600}
+.time-field{display:flex;flex-direction:column;gap:.3rem;min-width:0}
+.time-field-controls{display:flex;position:relative;align-items:center;gap:.3rem;min-width:0}
+.time-field-controls>input[type=text]{width:100%;min-width:0}
+.time-picker-button{flex-shrink:0}.time-field-hint{font-size:.72rem;color:var(--muted-foreground,#64716e);font-weight:400}
+.time-native-picker{position:absolute;right:0;top:100%;width:1px!important;height:1px!important;opacity:0;pointer-events:none;padding:0!important;border:0!important}
+.date-time-field{display:grid;grid-template-columns:minmax(130px,1fr) minmax(150px,1fr);gap:.6rem;align-items:start;min-width:0}
+.date-time-field>input[type=date]{width:100%;min-width:0}
+.time-field input[aria-invalid=true]{border-color:var(--destructive,#ad3a32)}
+.plan-tools-menu,.plan-tools-submenu{max-height:min(70dvh,520px);overflow-y:auto}
+@media(max-width:520px){.date-time-field{grid-template-columns:1fr}.planner-overview .plan-overview{padding:.65rem}.selection-toolbar .btn{flex:1}.planner-primary-actions .btn{flex:1;justify-content:center}.time-field-controls input{font-size:16px}}
+
+.time-field-hint{display:none}.time-field:focus-within .time-field-hint{display:block}

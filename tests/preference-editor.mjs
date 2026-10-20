@@ -1,0 +1,10 @@
+import assert from 'node:assert/strict';
+import {preferenceEditorUpdate} from '../lib/preference-editor.ts';
+const initial={previousScope:'plan:alice',previousSaved:'old',scope:'plan:alice',saved:'old',draft:'unfinished',dirty:true};
+assert.equal(preferenceEditorUpdate(initial),'none','An unrelated workspace refresh retains unfinished edits.');
+assert.equal(preferenceEditorUpdate({...initial,saved:'new-remote'}),'conflict','An actual remote change needs an explicit review.');
+assert.equal(preferenceEditorUpdate({...initial,saved:'unfinished'}),'saved','The exact saved result acknowledges the form.');
+assert.equal(preferenceEditorUpdate({...initial,dirty:false,saved:'new-remote'}),'reset');
+assert.equal(preferenceEditorUpdate({...initial,scope:'another-plan:alice'}),'reset');
+assert.equal(preferenceEditorUpdate({...initial,scope:'plan:bob'}),'reset');
+console.log('Preference editor preserves unfinished edits, detects remote conflicts and resets only for exact saves or a new scope.');

@@ -1,12 +1,12 @@
 import {frontendPrivatePreferences} from './frontend-preferences.ts';
-import {validateCityStays} from './city-stays.ts';
-import {validatePlanningIdeas} from './idea-collections.ts';
+import {validateCityStays,dayCity} from './city-stays.ts';
+import {validatePlanningIdeas,planningIdeaCapacity} from './idea-collections.ts';
 import {planDateReview} from './plan-dates.ts';
 import type {FrontendPlan,FrontendItem,FrontendSuggestion,FrontendPreferences,FrontendState} from './frontend-state.ts';
 import {applyFrontendAction} from './frontend-actions.ts';
 import {validCitySelection,type CitySelection} from './city-search.ts';
 import {cityKey,cityProfile,type CityPlace,type PlacePhoto,type PlaceLocation} from './cities.ts';
-import {zonedStart} from './trip-time.ts';
+import {zonedStart,tripDays} from './trip-time.ts';
 import {formatMoney,planCurrency,validCurrency,currencyLocked} from './money.ts';
 import {destinationSettings,validTimezone} from './localization.ts';
 import {planKind,planType,parsePlanKind,validPlanDates,defaultPlanGoal,type PlanKind} from './plan-types.ts';
@@ -198,6 +198,17 @@ export function applyAction(input:State,a:Action):State {
   next.plan={id:crypto.randomUUID(),kind,city:validCitySelection(p.city,p.destination),name:p.name.trim(),destination:p.destination.trim(),goal:p.goal??defaultPlanGoal(kind,p.destination.trim()),start:p.start,end:p.end,timezone,currency,budget,contentDestination:p.destination.trim(),template:'custom'};
   if(p.stays)next.plan.stays=validateCityStays(p.stays,next.plan);if(p.planningIdeas)next.plan.planningIdeas=validatePlanningIdeas(p.planningIdeas);
   next.items=[];next.events=[];next.reminders=[];next.people=s.people?structuredClone(s.people):undefined;next.preferences=structuredClone(s.preferences);for(const id of memberIds)next.preferences[id]={...next.preferences[id],budget,cash:budget,reserve:0,financing:0};
+  const ideas=next.plan.planningIdeas??[],days=tripDays(next.plan.start,next.plan.end);
+  if(ideas.length>planningIdeaCapacity(next.plan.start,next.plan.end))throw Error('Choose up to 24 ideas per plan day, or extend your dates. Every selected idea needs a draft itinerary slot.');
+  // The trusted create route supplies the real founder even when the previous
+  // workspace is a demo. The public mutation schema rejects this internal key.
+  const creator=typeof a._creatorId==='string'?a._creatorId:actor;
+  next.items=ideas.map((idea,index)=>{
+   const day=days[index%days.length],minute=9*60+Math.floor(index/days.length)*30,context=dayCity(next,day);
+   const start=zonedStart(`${day}T${String(Math.floor(minute/60)).padStart(2,'0')}:${String(minute%60).padStart(2,'0')}`,context.timezone);
+   const draft=item(crypto.randomUUID(),idea.name,'Activity',start,30,null,'Provisional 30-minute slot from a saved idea. Review the time, duration, venue, cost and booking terms before approving or booking.');
+   return {...draft,ideaId:idea.id,participants:[creator],shares:{},values:{},approvals:[],status:'draft' as const,booking:'unconfirmed' as const,paid:[],location:context.destination,timezone:context.timezone,...(context.id!=='base'?{stayId:context.id}:{}),source:idea.note?`Saved idea: ${idea.note}`:'Saved idea',...(idea.url?{sourceUrl:idea.url}:{})};
+  });
   next.archives=[...(s.empty?[]:[snapshotTrip(s)]),...(s.archives??[])];next.deletedTrips=s.deletedTrips;next.demoRemoved=s.demoRemoved;next.version=s.version;audit(next,`${planType(next.plan).label} created.`);return normalizeWorkspace(next);
  }
  case 'reset':{
