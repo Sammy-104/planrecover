@@ -48,14 +48,14 @@ export function Decisions({state,actor,busy,act,onItem}:{state:State;actor:strin
    </div>
    <aside className="todo-side">
     {state.people&&state.plan.id&&<RemindersInbox key={`${state.plan.id}-${actor}`} planId={state.plan.id} memberId={actor} version={state.version} timezone={state.plan.timezone} jsonFetch={jsonFetch}/>}
-    <section className="todo-group" aria-labelledby="todo-upcoming">
-     <header className="todo-group-head"><h2 id="todo-upcoming">Upcoming reminders</h2><Pill>In-app</Pill></header>
+    <details className="todo-group todo-secondary"><summary>Shared reminder checklist <span>{reminders.length}</span></summary><section aria-labelledby="todo-upcoming">
+     <header className="todo-group-head"><h2 id="todo-upcoming">Shared completion</h2><Pill>In-app</Pill></header>
      {!reminders.length&&<p className="muted todo-pad">Nothing scheduled yet.</p>}
      <ul className="todo-checklist">{reminders.map(r=><li key={r.id} className={`todo-check ${r.done?'done':''}`}><Checkbox disabled={!canEdit||busy} aria-label={`Mark ${r.title} done`} checked={r.done} onCheckedChange={v=>act(r.taskId?{type:'task',itemId:r.taskId,done:v}:{type:'reminder',reminderId:r.id,done:v})}/><div><strong>{r.title}</strong><span>{datetime(r.due,state.plan.timezone)} · {state.plan.timezone}</span>{r.consequence&&<p>{r.consequence}</p>}{state.items.some(item=>item.id===r.itemId)&&<button className="text-button" onClick={()=>onItem(state.items.find(item=>item.id===r.itemId)!)}>View {r.taskId?'task':'item'}</button>}</div></li>)}</ul>
      <p className="source-footnote todo-pad">Provider cutoffs are labelled demo terms. Unknown cutoffs are shown as unknown. Saved notifications appear in your private inbox above when available.</p>
-    </section>
-    <PreparationTasks state={state} busy={busy||!canEdit} act={act} onItem={onItem}/>
-    {isDemoTrip(state)&&<section className="todo-group todo-member-change"><div className="todo-member-head"><span className="todo-row-icon"><Users size={17}/></span><div><h2>A friend’s availability changed?</h2><p>Inspect the non-refundable lodge commitment, then propose a new split. Reporting a departure never rewrites approved costs.</p></div></div><div className="todo-member-controls"><Choose label="Departing member" value={departing} onChange={setDeparting} options={members.filter(m=>memberIds.includes(m.id)).map(m=>({value:m.id,label:m.name}))}/><button className="btn" disabled={busy} onClick={()=>act({type:'departure',departing},'Departure proposal created; existing shares preserved')}>Propose departure</button></div></section>}
+    </section></details>
+    {state.items.some(item=>item.category==='Preparation')&&<details className="todo-group todo-secondary"><summary>Preparation tasks</summary><PreparationTasks state={state} busy={busy||!canEdit} act={act} onItem={onItem}/></details>}
+    {isDemoTrip(state)&&<details className="todo-group todo-secondary"><summary>Demo: change who’s coming</summary><section className="todo-member-change"><div className="todo-member-head"><span className="todo-row-icon"><Users size={17}/></span><div><h2>A friend’s availability changed?</h2><p>Inspect the non-refundable lodge commitment, then propose a new split. Reporting a departure never rewrites approved costs.</p></div></div><div className="todo-member-controls"><Choose label="Departing member" value={departing} onChange={setDeparting} options={members.filter(m=>memberIds.includes(m.id)).map(m=>({value:m.id,label:m.name}))}/><button className="btn" disabled={busy} onClick={()=>act({type:'departure',departing},'Departure proposal created; existing shares preserved')}>Propose departure</button></div></section></details>}
    </aside>
   </div>
  </div>;}

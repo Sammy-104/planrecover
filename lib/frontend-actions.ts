@@ -24,7 +24,7 @@ const ids=z.array(id).max(100).refine(v=>new Set(v).size===v.length);
 const city=z.object({id,name:text(180).min(1),country:text(180).min(1),region:text(180),label:text(180).min(1),latitude:z.number().finite().min(-90).max(90),longitude:z.number().finite().min(-180).max(180)}).strict();
 const timezone=text(100).min(1).refine(v=>{try{new Intl.DateTimeFormat('en',{timeZone:v});return true;}catch{return false;}});
 export const frontendStaySchema=z.object({id,city,start:day,end:day,timezone,kind:z.enum(['stay','overnight']),note:text(300)}).strict();
-export const frontendPlanningIdeaSchema=z.object({id,name:text(180).min(1),url:text(2000).optional(),note:text(500),done:z.boolean().optional()}).strict();
+export const frontendPlanningIdeaSchema=z.object({id,name:text(180).min(1),url:text(2000).optional(),note:text(1000),done:z.boolean().optional()}).strict();
 const common={actor:id.optional(),tripId:id.optional()};
 const style=z.object({pace:z.enum(['relaxed','balanced','busy']),interests:z.array(text(80).min(1)).max(30),dietary:text(160).optional(),mobility:z.enum(['any','step-free','short-walks']).optional(),availableFrom:text(5).optional(),availableTo:text(5).optional(),travelBuffer:z.number().int().min(0).max(90).optional(),queueMinutes:z.number().int().min(0).max(120).optional(),restMinutes:z.number().int().min(0).max(180).optional(),maxWalkMinutes:z.number().int().min(0).max(180).optional()}).strict();
 const planningCosts=z.object({currency:z.string().regex(/^[A-Z]{3}$/),entries:z.array(z.object({id,label:text(100).min(1),amount:money.nullable(),participants:ids}).strict()).max(20)}).strict();

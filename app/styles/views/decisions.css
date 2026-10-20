@@ -249,3 +249,10 @@
   .recovery-step-side { grid-column: 2; justify-content: flex-start; flex-wrap: wrap; white-space: normal; }
 }
 .recovery-progress > .source-footnote { margin-top: .6rem; }
+
+/* Keep secondary shared checklists and demo tools out of the primary reminder list. */
+.todo-secondary > summary { display: flex; align-items: center; justify-content: space-between; gap: .75rem; padding: .95rem 1.1rem; cursor: pointer; font-size: var(--t-sm); font-weight: 600; }
+.todo-secondary > summary::after { content: "+"; color: var(--ink-3); margin-left: auto; }
+.todo-secondary[open] > summary::after { content: "−"; }
+.todo-secondary[open] > summary { border-bottom: 1px solid var(--line); }
+.todo-secondary > .panel { border: 0; box-shadow: none; margin: 0; }

@@ -27,11 +27,11 @@ function PlanSwitcher({state,busy,shared,onSelect,onNew,onAll}:{state:State|null
  return <div className="plan-switcher-shell"><DropdownMenu><DropdownMenuTrigger asChild>{trigger}</DropdownMenuTrigger>
   <DropdownMenuContent align="start" className="plan-switcher-menu">
    <DropdownMenuLabel>Your plans</DropdownMenuLabel>
-   {state&&tripList(state).map(t=><DropdownMenuItem key={t.id} onSelect={()=>onSelect(t.id)} className="plan-switcher-item">
+   {state&&tripList(state).slice(0,6).map(t=><DropdownMenuItem key={t.id} onSelect={()=>onSelect(t.id)} className="plan-switcher-item">
     <PlanIcon kind={planKind(t.plan)} size={15}/><span><strong>{t.plan.template==='algonquin'?'Demo · ':''}{t.plan.name}</strong><small>{t.plan.destination.split(',')[0]} · {t.itemCount} {t.itemCount===1?'item':'items'}</small></span>{t.active&&<Check size={15} className="plan-switcher-check"/>}
    </DropdownMenuItem>)}
    <DropdownMenuSeparator/>
-   <DropdownMenuItem onSelect={onAll}><House size={15}/>All plans</DropdownMenuItem>
+   <DropdownMenuItem onSelect={onAll}><House size={15}/>All plans{state&&tripList(state).length>6?` (${tripList(state).length})`:null}</DropdownMenuItem>
    <DropdownMenuItem onSelect={onNew}><Plus size={15}/>New plan</DropdownMenuItem>
   </DropdownMenuContent></DropdownMenu></div>;
 }
@@ -54,8 +54,7 @@ export function AppSidebar({view,onGo,count,collab,state,busy,simple,identityMod
   </SidebarContent>
   <SidebarFooter className="sidebar-bottom">
    <div className="persona"><Avatar id={actor}/><div className="persona-text"><strong>{personName}</strong><small>{personRole}</small></div></div>
-   {!identityMode&&<div className="persona-switch"><span className="sidebar-caption">View as</span><Choose label="View as demo member" value={actor} onChange={onActor} options={memberOptions}/></div>}
-   {!identityMode&&<p className="demo-note">Fictional demo · no real bookings</p>}
+   {!identityMode&&<details className="persona-switch"><summary>Demo options</summary><Choose label="View as demo member" value={actor} onChange={onActor} options={memberOptions}/><p className="demo-note">Fictional demo · no real bookings</p></details>}
   </SidebarFooter>
  </Sidebar>;
 }

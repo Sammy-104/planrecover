@@ -443,3 +443,39 @@
 .allowance-people label { display: inline-flex; align-items: center; gap: .4rem; padding: .3rem .65rem; border-radius: 999px; border: 1px solid var(--line); font-size: var(--t-sm); cursor: pointer; }
 .allowance-people label:has(input:checked) { background: var(--brand-soft); border-color: var(--brand-soft-2); color: var(--brand-ink); }
 .delete-trip-confirm strong { color: var(--ink); }
+
+/* Activity dialogs show the essentials first; review panels keep full terms. */
+.activity-dialog .dlg-place { margin: .75rem 0; }
+.activity-dialog .venue-details-body { padding-top: .65rem; }
+.activity-dialog .activity-prerequisites > .dependency-review { margin-top: .65rem; }
+.activity-dialog .activity-prerequisites .terms-box { padding: .75rem; }
+.activity-dialog .financial-details[open] > summary { margin-bottom: .75rem; }
+.activity-dialog .financial-details .merchant-funding { margin: 0 0 1rem; }
+.activity-dialog .modal-body > .edit-box { margin: .9rem 0; }
+
+.plan-budget-options-body { padding-top: .75rem; }
+
+.plan-tools-submenu { max-width: min(310px, calc(100vw - 2rem)); }
+.plan-tools-submenu .tools-export-note { max-width: 28ch; }
+
+/* The itinerary stays scannable; group reactions open only when requested. */
+.schedule-location { display: inline-flex; align-items: center; gap: .25rem; min-width: 0; max-width: 38ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.schedule-location svg { flex-shrink: 0; }
+.schedule-feedback { grid-column: 4 / -1; margin-top: .35rem; border-top: 1px solid var(--line); padding-top: .3rem; }
+.schedule-feedback > summary { display: flex; align-items: center; gap: .3rem; color: var(--ink-3); cursor: pointer; font-size: var(--t-xs); list-style: none; width: fit-content; }
+.schedule-feedback > summary::after { content: '+'; margin-left: .25rem; }
+.schedule-feedback[open] > summary::after { content: '−'; }
+.schedule-feedback > .activity-discussion { margin-top: .45rem; }
+.schedule-feedback .activity-reactions { flex-wrap: wrap; }
+.schedule-pin { display: inline-grid; place-items: center; min-height: 28px; min-width: 28px; }
+.schedule-date-navigation { display: flex; justify-content: flex-end; align-items: center; gap: .35rem; margin: .35rem 0; }
+.schedule-date-navigation input { min-height: 34px; padding: .25rem .45rem; font-size: var(--t-sm); border: 1px solid var(--line); border-radius: var(--r-sm); }
+.schedule-date-navigation label { min-width: 0; }
+@media(max-width:640px) {
+ .schedule-feedback { grid-column: 2 / -1; }
+ .schedule-card-main strong { overflow-wrap: anywhere; white-space: normal; }
+ .schedule-location { max-width: 100%; white-space: normal; align-items: start; }
+ .schedule-card-actions { gap: .4rem; flex-wrap: wrap; }
+ .schedule-card-buttons { gap: .6rem; }
+ .schedule-date-navigation { justify-content: space-between; }
+}

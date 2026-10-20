@@ -258,3 +258,54 @@
   .inline-currency input { width: 100%; }
   .checkout-facts { grid-template-columns: 1fr 1fr; }
 }
+
+/* Focused money views: keep one task visible at a time. */
+.money-sections { gap: 1rem; min-width: 0; }
+.money-section-tabs { display: inline-flex; align-self: flex-start; width: min(100%, 390px); height: auto; padding: .25rem; gap: .2rem; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface-2); }
+.money-section-tabs [data-slot="tabs-trigger"] { min-height: 38px; padding: .5rem .85rem; font-size: var(--t-sm); color: var(--ink-3); }
+.money-section-tabs [data-state="active"] { color: var(--brand-ink); background: var(--surface); box-shadow: var(--shadow-xs); }
+.money-section-content { display: grid; gap: 1rem; min-width: 0; }
+.money-section-content[data-state="inactive"] { display: none; }
+.money-section-content > * { min-width: 0; }
+.money-refund-note { display: flex; align-items: flex-start; gap: .45rem; color: var(--ink-3); font-size: var(--t-xs); }
+.money-refund-note svg { flex-shrink: 0; margin-top: .05rem; }
+.money-disclosure { border-top: 1px solid var(--line); margin-top: 1rem; }
+.money-disclosure > summary { display: flex; align-items: center; justify-content: space-between; gap: .75rem; min-height: 44px; padding: .75rem 0; color: var(--ink-2); font-size: var(--t-sm); font-weight: 560; cursor: pointer; list-style: none; }
+.money-disclosure > summary::-webkit-details-marker { display: none; }
+.money-disclosure > summary > svg { flex-shrink: 0; color: var(--ink-3); transition: transform .15s; }
+.money-disclosure[open] > summary > svg { transform: rotate(180deg); }
+.money-disclosure-body { padding-top: .25rem; }
+.money-disclosure-body > .source-footnote { margin-bottom: 1rem; }
+.money-extra-balances { display: grid; gap: .6rem; margin: .25rem 0 0; font-size: var(--t-sm); }
+.money-extra-balances > div { display: flex; justify-content: space-between; gap: 1rem; }
+.money-extra-balances dt { color: var(--ink-3); }
+.money-extra-balances dd { margin: 0; font-variant-numeric: tabular-nums; font-weight: 600; }
+.money-disclosure.repayment-form { margin: 0; border: 1px solid var(--line); }
+.money-disclosure.repayment-form > summary { padding: 0; }
+.money-review-prompt { display: flex; align-items: center; justify-content: space-between; gap: .75rem; flex-wrap: wrap; padding: .8rem 1rem; border: 1px solid var(--warn-line); border-radius: var(--r-md); background: var(--warn-soft); font-size: var(--t-sm); }
+@media (max-width: 520px) {
+ .money-section-tabs { width: 100%; }
+ .money-section-tabs [data-slot="tabs-trigger"] { padding: .5rem .4rem; }
+ .money-balance-grid { grid-template-columns: 1fr; }
+ .money-balance { grid-template-columns: minmax(0, 1fr) auto; gap: .75rem; align-items: baseline; }
+ .money-extra-balances > div { flex-wrap: wrap; gap: .15rem .75rem; }
+ .money-feature { padding: 1.15rem; }
+ .money-feature-amount { margin-bottom: .75rem; }
+}
+
+/* Quiet empty states keep the next action visible on smaller screens. */
+.payment-center-clear { padding-block: 1rem; gap: .25rem; }
+.payment-center-clear h2 { font-size: var(--t-lg); }
+.payment-center-clear > .section-top { margin: 0; }
+.payment-waiting { display: block; }
+.payment-waiting > summary { color: #7a4a09; font-size: var(--t-sm); cursor: pointer; }
+.payment-waiting > div { display: grid; gap: .35rem; justify-items: start; margin-top: .6rem; }
+.money-feature { padding: 1.1rem 1.25rem; }
+.money-feature-amount { margin-bottom: .8rem; font-size: clamp(1.75rem, 3vw, 2.2rem); }
+.money-feature-line { padding-block: .45rem; }
+.money-history-more { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: .75rem; margin-top: 1rem; font-size: var(--t-sm); color: var(--ink-3); }
+@media (max-width: 520px) {
+ .payment-center > .section-top { flex-wrap: wrap; gap: .6rem; }
+ .money-top { gap: .75rem; }
+ .money-details .money-empty-line { padding-top: .25rem; }
+}

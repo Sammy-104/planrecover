@@ -5,7 +5,7 @@
 .chat-heading .eyebrow svg { width: 14px; height: 14px; }
 .chat-mode { align-self: center; }
 
-.chat-layout { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 1.25rem; align-items: start; }
+.chat-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1rem; align-items: start; }
 
 /* ---------- Conversation window ---------- */
 .chat-window {
@@ -113,7 +113,7 @@
 .chat-footnote { color: var(--ink-4); font-size: .6875rem; line-height: 1.5; }
 
 /* ---------- Aside ---------- */
-.chat-aside { display: grid; gap: 1rem; min-width: 0; position: sticky; top: calc(var(--topbar-h) + 1rem); }
+.chat-aside { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1rem; min-width: 0; }
 .chat-card { display: grid; gap: .65rem; padding: 1.1rem; border-radius: var(--r-lg); background: var(--surface); border: 1px solid var(--line); box-shadow: var(--shadow-xs); }
 .chat-card h2 { font-size: var(--t-base); }
 .chat-card > p { color: var(--ink-2); font-size: var(--t-sm); }
@@ -134,6 +134,24 @@
 .chat-brief.good, .chat-brief.green, .chat-brief.success { background: var(--ok-soft); border-color: #c4e5d1; }
 .chat-preferences { display: grid; gap: .1rem; padding-top: .5rem; border-top: 1px solid var(--line); }
 .chat-preferences .btn { justify-self: start; }
+.chat-tools > summary { cursor: pointer; font-weight: 600; font-size: var(--t-sm); }
+.chat-tools[open] > summary { margin-bottom: .6rem; }
+.chat-tools[open] > * + * { margin-top: .55rem; }
+.chat-plan-action { display: flex; align-items: center; gap: .65rem; flex-wrap: wrap; }
+.chat-plan-action > small { color: var(--ink-3); font-size: var(--t-xs); }
+.draft-selection-toolbar { display: flex; align-items: center; justify-content: space-between; gap: .75rem; margin-block: .75rem; font-size: var(--t-sm); }
+.draft-mode-picker { margin-block: .75rem; }
+.draft-mode-picker button { display: inline-flex; align-items: center; justify-content: center; gap: .4rem; }
+.draft-mode-picker button[aria-pressed="true"] { background: var(--brand-soft); color: var(--brand-ink); }
+.ai-draft-review { display: grid; gap: .65rem; min-width: 0; }
+.ai-draft-review .section-top { flex-wrap: wrap; }
+.ai-draft-review .section-top > div { min-width: 0; flex: 1 1 260px; }
+.ai-draft-review .section-top p { font-size: var(--t-sm); color: var(--ink-2); }
+.ai-draft-review details, .draft-review-notes { margin-top: .5rem; font-size: var(--t-sm); }
+.ai-draft-review details summary, .draft-review-notes summary { cursor: pointer; color: var(--ink-2); }
+.ai-draft-review details p, .draft-review-notes p { margin-top: .5rem; }
+.draft-add-actions { padding-top: .65rem; }
+.draft-add-actions .notice { width: 100%; }
 
 /* ---------- Draft itinerary ---------- */
 .chat-draft-items { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: .75rem; margin-top: .75rem; }

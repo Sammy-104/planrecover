@@ -1,20 +1,22 @@
 'use client';
-import {useEffect,useState} from 'react';
+import {useEffect,useState,useRef} from 'react';
 import {MessageCircle,ThumbsUp,Star,Trash2,Send} from 'lucide-react';
 import {activityDecision,decisionSummary,type ActivityDecision} from '@/lib/activity-decisions';
 import {planMembers,isDemoTrip,tripCatalog,type State,type Action} from '@/lib/model';
 
 type Act=(action:Omit<Action,'actor'>,message?:string)=>Promise<unknown>;
 export function ActivityDiscussion({state,targetId,actor,act,busy,readOnly,compact=false,onOpen}:{state:State;targetId:string;actor:string;act:Act;busy:boolean;readOnly:boolean;compact?:boolean;onOpen?:()=>void}){
+ const updating=useRef(false);
  const [remote,setRemote]=useState<ActivityDecision|null>(null),[text,setText]=useState(''),[commentId,setCommentId]=useState(()=>crypto.randomUUID()),[syncError,setSyncError]=useState(false);
  useEffect(()=>setRemote(null),[state.version,targetId]);
+ useEffect(()=>{setText('');setCommentId(crypto.randomUUID());setSyncError(false);},[state.plan.id,targetId,actor]);
  useEffect(()=>{
-  if(compact||isDemoTrip(state))return;const life=new AbortController();
-  const load=async()=>{if(document.visibilityState==='hidden')return;try{const headers=new Headers(),token=new URLSearchParams(window.location.hash.slice(1)).get('trip');if(token)headers.set('x-trip-share',token);const response=await fetch('/api/activity-discussion?'+new URLSearchParams({tripId:state.plan.id!,targetId}),{headers,signal:life.signal});if(!response.ok)throw Error();const result=await response.json() as {decision:ActivityDecision};if(!life.signal.aborted){setRemote(result.decision);setSyncError(false);}}catch{if(!life.signal.aborted)setSyncError(true);}};void load();const timer=setInterval(()=>void load(),5000);return()=>{life.abort();clearInterval(timer);};
+  if(compact||isDemoTrip(state))return;const life=new AbortController();let loading=false;
+  const load=async()=>{if(document.visibilityState==='hidden'||loading)return;loading=true;try{const headers=new Headers(),token=new URLSearchParams(window.location.hash.slice(1)).get('trip');if(token)headers.set('x-trip-share',token);const response=await fetch('/api/activity-discussion?'+new URLSearchParams({tripId:state.plan.id!,targetId}),{headers,signal:life.signal});if(!response.ok)throw Error();const result=await response.json() as {decision:ActivityDecision};if(!life.signal.aborted){setRemote(result.decision);setSyncError(false);}}catch{if(!life.signal.aborted)setSyncError(true);}finally{loading=false;}};void load();const timer=setInterval(()=>void load(),5000);return()=>{life.abort();clearInterval(timer);};
  },[state.plan.id,state.version,targetId,compact]);
  const decision=remote??activityDecision(state,targetId),view={...state,activityDecisions:{...state.activityDecisions,[(state.items.find(i=>i.id===targetId)?.ideaId)??targetId]:decision}},summary=decisionSummary(view,targetId),names=new Map(planMembers(state).map(p=>[p.id,p.name])),cancelled=state.items.find(i=>i.id===targetId)?.status==='cancelled',disabled=busy||readOnly||cancelled;
  const vote=decision.votes[actor],must=decision.mustVisit.includes(actor);
- async function update(action:Omit<Action,'actor'>){const next=await act({...action,targetId});if(next)setRemote(null);return next;}
+ async function update(action:Omit<Action,'actor'>){if(updating.current)return;updating.current=true;try{const next=await act({...action,targetId});if(next)setRemote(null);return next;}finally{updating.current=false;}}
  return <section className={`activity-discussion ${compact?'compact':''}`} aria-label={compact?'Group feedback':'Activity discussion'}>
  {!compact&&<div className="section-top"><div><h3><MessageCircle size={18}/>Plan it together</h3><p className="source-footnote">Votes and must-visits express preferences. Booking and cost approvals are separate.</p></div></div>}
  <div className="activity-reactions"><button type="button" disabled={disabled} aria-pressed={vote==='interested'} title={summary.interested.map(id=>names.get(id)).join(', ')} onClick={()=>void update({type:'activity_vote',vote:vote==='interested'?null:'interested'})}><ThumbsUp size={15}/>{compact?'Interested':'I’m interested'} <span>{summary.interested.length}</span></button><button type="button" disabled={disabled} aria-pressed={vote==='pass'} title={summary.pass.map(id=>names.get(id)).join(', ')} onClick={()=>void update({type:'activity_vote',vote:vote==='pass'?null:'pass'})}>Pass <span>{summary.pass.length}</span></button><button type="button" className="must-visit-button" disabled={disabled} aria-pressed={must} title={summary.mustVisit.map(id=>names.get(id)).join(', ')} onClick={()=>void update({type:'activity_priority',mustVisit:!must})}><Star size={15}/>{compact?'Must-visit':'A must-visit for me'} <span>{summary.mustVisit.length}</span></button>{compact&&onOpen&&<button type="button" className="discussion-open" onClick={onOpen}><MessageCircle size={15}/>{summary.comments.length}<span className="sr-only"> Open discussion</span></button>}</div>

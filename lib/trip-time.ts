@@ -1,7 +1,24 @@
+// The planner repeatedly checks the same instants while comparing candidate slots.
+// Bound both caches because this module also lives in long-running Worker processes.
+const localFormatters=new Map<string,Intl.DateTimeFormat>();
+const localTimes=new Map<string,string>();
+const MAX_LOCAL_FORMATTERS=64,MAX_LOCAL_TIMES=2048;
+function localFormatter(zone:string){
+ let formatter=localFormatters.get(zone);
+ if(!formatter){
+  formatter=new Intl.DateTimeFormat('en-CA',{timeZone:zone,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'});
+  if(localFormatters.size>=MAX_LOCAL_FORMATTERS)localFormatters.delete(localFormatters.keys().next().value!);
+  localFormatters.set(zone,formatter);
+ }
+ return formatter;
+}
 export function localDateTime(iso:string,zone:string){
- const parts=new Intl.DateTimeFormat('en-CA',{timeZone:zone,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(new Date(iso));
+ const key=zone+'\0'+iso,cached=localTimes.get(key);if(cached!==undefined)return cached;
+ const parts=localFormatter(zone).formatToParts(new Date(iso));
  const get=(key:string)=>parts.find(p=>p.type===key)?.value??'';
- return `${get('year')}-${get('month')}-${get('day')}T${get('hour')}:${get('minute')}`;
+ const value=`${get('year')}-${get('month')}-${get('day')}T${get('hour')}:${get('minute')}`;
+ if(localTimes.size>=MAX_LOCAL_TIMES)localTimes.delete(localTimes.keys().next().value!);
+ localTimes.set(key,value);return value;
 }
 export function zonedStart(local:string,zone:string){
  if(!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(local))throw Error('Choose a valid local date and time.');

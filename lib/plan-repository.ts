@@ -211,7 +211,7 @@ export class PlanRepository {
         root=(await this.loadWorkspace(owner))!;
       }
       await this.importWorkspace(owner,root,identity);
-      const next=applyAction(initialState(),{type:'create_trip',actor:'sam',plan});
+      const next=applyAction(initialState(),{type:'create_trip',actor:'sam',plan,_creatorId:identity.id});
       delete next.people; next.preferences={}; initializePeople(next,identity);
       next.archives=[...(!root.empty?[{id:root.plan.id!,archivedAt:new Date().toISOString(),workspace:planBody(root)}]:[]),...(root.archives??[])];
       // Preserve internal preferences when moving an existing plan to history.

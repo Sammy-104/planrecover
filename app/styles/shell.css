@@ -119,8 +119,8 @@
   .topbar-search span, .topbar-search kbd { display: none; }
   .crumb-plan, .crumb-sep { display: none; }
   .save-indicator span { display: none; }
-  .page { padding-bottom: 6rem; }
-  .app-footer { padding-bottom: 5.5rem; }
+  .page { padding-bottom: 1.5rem; }
+  .app-footer { padding-bottom: calc(5.5rem + env(safe-area-inset-bottom)); }
   .mobile-bottom-nav {
     position: fixed; z-index: 40; left: .75rem; right: .75rem; bottom: calc(.75rem + env(safe-area-inset-bottom));
     display: grid; grid-template-columns: repeat(4, 1fr); padding: .3rem;
@@ -134,3 +134,11 @@
   .app-sidebar, .topbar, .mobile-bottom-nav, .app-footer, .skip-link { display: none !important; }
   body, .app-main { background: #fff !important; }
 }
+
+/* Secondary demo controls stay out of the everyday navigation. */
+.persona-switch > summary { display: flex; align-items: center; justify-content: space-between; min-height: 32px; cursor: pointer; color: var(--ink-3); font-size: var(--t-xs); list-style: none; }
+.persona-switch > summary::-webkit-details-marker { display: none; }
+.persona-switch > summary::after { content: "+"; font-size: var(--t-base); }
+.persona-switch[open] > summary::after { content: "-"; }
+.persona-switch > .demo-note { margin-top: .4rem; }
+.plan-switcher-menu { max-height: min(70dvh, 480px); overflow-y: auto; }

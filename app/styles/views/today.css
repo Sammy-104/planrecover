@@ -151,3 +151,5 @@
   .today-timeline { padding: 1rem .9rem .5rem; }
   .today-booking { flex-wrap: wrap; }
 }
+
+.today-offline>summary{cursor:pointer;list-style:none;margin:0}.today-offline>summary::after{content:"+";margin-left:auto}.today-offline[open]>summary::after{content:"−"}.today-offline-content{display:grid;gap:.7rem;margin-top:1rem}.today-offline-content>p{margin:0}

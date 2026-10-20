@@ -126,7 +126,11 @@ export const actionSchema=z.discriminatedUnion('type',[
 // validate every field at runtime; expanding their Cartesian type union through
 // the frontend makes TypeScript inference unnecessarily expensive.
 type WorkspaceAction={type:string;actor?:string;tripId?:string;[key:string]:unknown};
-const workspaceActionSchema=z.union([actionSchema,frontendActionSchema]) as unknown as z.ZodType<WorkspaceAction>;
+const draftBatchSchema=z.object({...common,type:z.literal('add_drafts'),batchId:id,actions:z.array(actionSchema).min(1).max(12)}).strict().superRefine((batch,context)=>{
+ for(const [index,action] of batch.actions.entries())if(!['add_item','add_suggestion'].includes(action.type)||action.actor!==undefined||action.tripId!==undefined)
+  context.addIssue({code:z.ZodIssueCode.custom,path:['actions',index],message:'Select draft additions in this plan only.'});
+});
+const workspaceActionSchema=z.union([actionSchema,frontendActionSchema,draftBatchSchema]) as unknown as z.ZodType<WorkspaceAction>;
 export const workspaceMutationSchema=z.object({version:count,action:workspaceActionSchema}).strict();
 export type ValidatedAction=z.infer<typeof actionSchema>;
 export type WorkspaceMutation=z.infer<typeof workspaceMutationSchema>;

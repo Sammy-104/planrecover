@@ -193,3 +193,11 @@
 .insertion-preview.review, .insertion-preview.draft, .insertion-preview.check { border-color: var(--warn-line); background: var(--warn-soft); }
 .planning-fit-review { display: grid !important; gap: .3rem; }
 .planning-fit-review p { font-size: var(--t-sm); }
+
+.suggestion-context > summary { color: var(--brand); font-size: var(--t-xs); cursor: pointer; }
+.suggestion-context > :not(summary) { margin-top: .45rem; }
+.suggestion-context .suggestion-reason { display: block; }
+.suggestion-context ul { padding-left: 1rem; color: var(--ink-3); font-size: var(--t-xs); }
+.suggestion-metadata { flex-wrap: wrap; }
+.suggestion-metadata strong { font-size: var(--t-xs); }
+.activity-options .activity-discussion + .suggestion-votes { margin-top: 1rem; }

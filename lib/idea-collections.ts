@@ -1,4 +1,7 @@
 import {validCitySelection,type CitySelection} from './city-search.ts';
+import {tripDays} from './trip-time.ts';
+export const IDEAS_PER_PLAN_DAY=24;
+export function planningIdeaCapacity(start:string,end:string){return tripDays(start,end).length*IDEAS_PER_PLAN_DAY;}
 export type PlanningIdea={id:string;name:string;note:string;url?:string;done?:boolean};
 export type IdeaCollection={id:string;name:string;destination:string;city?:CitySelection;timeframe:string;notes:string;ideas:PlanningIdea[];updatedAt:string};
 export type IdeaLibrary={version:number;collections:IdeaCollection[]};
