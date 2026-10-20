@@ -64,15 +64,28 @@ const unavailable = () => new BackendError('RECEIPT_UNAVAILABLE', 'This receipt 
 /** Drafts are separate from approved receipts and never change financial events. */
 export class ReceiptDraftRepository {
   constructor(private database: D1Database) {}
-  async create(scope: ReceiptScope, file: { fileKey: string; mime: string; size: number }) {
-    const id = crypto.randomUUID(), now = new Date().toISOString();
-    const result = await this.database.prepare(`INSERT INTO receipt_drafts
+  async create(scope: ReceiptScope, file: { fileKey: string; mime: string; size: number;publication?:import('./private-uploads.ts').PrivateUploadPublication;publicationResult?:(draft:ReceiptDraft)=>unknown }) {
+    const id = file.publication?.id??crypto.randomUUID(), now = new Date().toISOString();
+    const statement = this.database.prepare(`INSERT INTO receipt_drafts
       (id,owner,plan_id,uploaded_by,file_key,mime,size,status,version,unknown_fields,warnings,created,updated)
       SELECT ?,?,?,?,?,?,?,'uploaded',0,?,?,?,? WHERE ${accessCondition(true)}`)
       .bind(id, scope.owner, scope.planId, scope.memberId, file.fileKey, file.mime, file.size,
         JSON.stringify(unknownReceiptFields(null)), JSON.stringify(['Saved source; enter and review all receipt values.']), now, now,
-        scope.owner, scope.planId, scope.memberId).run();
-    if (!result.meta.changes) throw new BackendError('FORBIDDEN', 'Editing access is required to upload a receipt.', 403);
+        scope.owner, scope.planId, scope.memberId);
+    if(file.publication){
+      const draft:ReceiptDraft={id,planId:scope.planId,uploadedBy:scope.memberId,fileKey:file.fileKey,mime:file.mime,status:'uploaded',version:0,sourceFacts:null,unknownFields:unknownReceiptFields(null),warnings:['Saved source; enter and review all receipt values.'],reviewedReceipt:null,provider:null,modelId:null,created:now,updated:now};
+      const guard=crypto.randomUUID();
+      await this.database.batch([statement,
+        this.database.prepare('INSERT INTO backend_write_guards(id,valid) VALUES (?,CASE WHEN changes()=1 THEN 1 ELSE 0 END)').bind(guard),
+        this.database.prepare("UPDATE receipt_objects SET status='ready' WHERE file_key=? AND owner=? AND plan_id=? AND status='staged'").bind(file.fileKey,scope.owner,scope.planId),
+        this.database.prepare('INSERT INTO backend_write_guards(id,valid) VALUES (?,CASE WHEN changes()=1 THEN 1 ELSE 0 END)').bind(guard+'-object'),
+        ...file.publication.complete(file.publicationResult?file.publicationResult(draft):{draft}),
+        this.database.prepare('DELETE FROM backend_write_guards WHERE id IN (?,?)').bind(guard,guard+'-object'),
+      ]);
+    }else{
+      const result=await statement.run();
+      if (!result.meta.changes) throw new BackendError('FORBIDDEN', 'Editing access is required to upload a receipt.', 403);
+    }
     return this.get(scope, id);
   }
   async get(scope: ReceiptScope, id: string) {

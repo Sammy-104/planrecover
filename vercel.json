@@ -1,0 +1,13 @@
+{
+  "$schema":"https://openapi.vercel.sh/vercel.json",
+  "framework":"nextjs",
+  "buildCommand":"pnpm build:vercel",
+  "installCommand":"pnpm install --frozen-lockfile",
+  "outputDirectory":".next-vercel",
+  "regions":["iad1"],
+  "env":{
+    "PLANRECOVER_HOSTING":"vercel",
+    "NEXT_PUBLIC_HOSTING_PLATFORM":"vercel",
+    "NEXT_PUBLIC_AUTH_PROVIDER":"clerk"
+  }
+}

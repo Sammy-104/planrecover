@@ -2,6 +2,7 @@
 import {useEffect,useRef,useState} from 'react';
 import {Upload,LoaderCircle,RotateCw,ScanLine,FileText} from 'lucide-react';
 import {prepareReceiptImage,scanReceiptImage} from '@/lib/browser-receipt-scan';
+import {submitFileForm} from '@/lib/client-private-upload';
 import type {ReceiptDraft} from '@/lib/receipt-drafts';
 type JsonFetch=(url:string,init?:RequestInit)=>Promise<any>;
 export function ReceiptScanner({planId,draft,jsonFetch,onResult,onPreview,onBusyChange,sourceHeaders,disabled=false,cloudConnected=false}:{
@@ -36,7 +37,7 @@ export function ReceiptScanner({planId,draft,jsonFetch,onResult,onPreview,onBusy
    if(!pdf)showPreview(image);
    progress(cloudConnected?'Saving your source and checking the receipt…':'Saving your receipt source…');
    const form=new FormData();form.set('file',image,pdf?'receipt.pdf':'receipt.jpg');form.set('tripId',planId);
-   const result=await jsonFetch('/api/receipt',{method:'POST',body:form,signal:controller.signal});
+   const result=await submitFileForm('/api/receipt',form,jsonFetch,controller.signal);
    if(!mounted.current)return;onResult(result);
    if(pdf){progress(result.draft.sourceFacts?.items?.length?`PDF read: ${result.draft.sourceFacts.items.length} ${result.draft.sourceFacts.items.length===1?'item':'items'} added. Review every amount against the source.`:result.note||'PDF saved. Review it manually or paste its receipt text below.');return;}
    if(result.draft.sourceFacts?.items?.length){progress(`${result.draft.sourceFacts.items.length} items added. Review the amounts and who had each item.`);return;}
