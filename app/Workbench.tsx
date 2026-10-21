@@ -51,6 +51,7 @@ import {GroupDecisionBoard} from '@/components/activity-discussion';
 import {ReceiptReviewTerms} from '@/components/receipt-review-terms';
 import {MobileNavigation} from '@/components/mobile-navigation';
 import {CheckoutReview} from '@/components/checkout-review';
+import {workspacePlanSelection} from '@/lib/workspace-plan-link';
 import {Dialog} from '@/components/ui/dialog';
 import {BookingImportDialog} from '@/components/booking-import';
 import {PlanStarter} from '@/components/plan-starter';
@@ -94,6 +95,7 @@ export default function Workbench({visitorDemo=false,onExitDemo}:{visitorDemo?:b
  const [collab,setCollab]=useState<Collaboration>({shared:false,canManage:true,sharingEnabled:false});
  const collabRef=useRef(collab);collabRef.current=collab;
  const receiptLinksHandled=useRef(new Set<string>()),receiptLinkLife=useRef(true);
+ const workspacePlanLinksHandled=useRef(new Set<string>());
  const [incomingSearch,setIncomingSearch]=useState('');
  useEffect(()=>{receiptLinkLife.current=true;const read=()=>setIncomingSearch(window.location.search);read();window.addEventListener('popstate',read);return()=>{receiptLinkLife.current=false;window.removeEventListener('popstate',read);};},[]);
  useEffect(()=>{if(state?.people)setActor(collab.memberId??'guest');else if(!demoMembers.some(m=>m.id===actor))setActor('sam');},[state?.plan.id,!!state?.people,collab.memberId]);
@@ -176,6 +178,13 @@ export default function Workbench({visitorDemo=false,onExitDemo}:{visitorDemo?:b
    selectPlan:tripId=>act({type:'select_trip',tripId}),
    openBlank:next=>{setReceipt(next);setView('plan');setTab('receipts');setModal('receipt');}
   }).then(result=>{if(result==='unavailable'&&receiptLinkLife.current)toast.info('Open an editable saved plan to add this receipt.');}).catch(()=>{if(receiptLinkLife.current)toast.error('The receipt review could not be opened. Open the saved plan and try again.');});
+ },[incomingSearch,state?.plan.id,collab.signedIn,collab.canEdit,collab.shared,collab.memberId,busy,lookupBusy,error,visitorDemo,tryDemo]);
+ useEffect(()=>{
+  if(!state||busy||lookupBusy||error||visitorDemo||tryDemo||window.location.pathname!=='/workspace')return;
+  const selection=workspacePlanSelection(incomingSearch,state,{signedIn:collab.signedIn===true,canEdit:collab.canEdit===true,shared:collab.shared,memberId:collab.memberId,hasShareToken:!!shareToken()});
+  if(!selection||workspacePlanLinksHandled.current.has(incomingSearch))return;workspacePlanLinksHandled.current.add(incomingSearch);
+  if(selection.status==='unavailable'){toast.info('That plan cannot be opened in this workspace. Open it in OneStep or use its invitation.');return;}
+  void(async()=>{const selected=selection.status==='select'?await act({type:'select_trip',tripId:selection.planId}):stateRef.current;if(!receiptLinkLife.current||window.location.search!==incomingSearch||selected?.plan.id!==selection.planId||stateRef.current?.plan.id!==selection.planId)return;setDay(selected.plan.start);setTab('itinerary');setView('plan');})();
  },[incomingSearch,state?.plan.id,collab.signedIn,collab.canEdit,collab.shared,collab.memberId,busy,lookupBusy,error,visitorDemo,tryDemo]);
  function openItem(i:Item){setSelectedItem(i);setModal('item');}
  function openSuggestion(c:Suggestion){const current=stateRef.current;setSelectedSuggestion(c.flexible&&!('evaluation' in c)&&current?{...c,start:zonedStart((day>=current.plan.start&&day<=current.plan.end?day:current.plan.start)+'T10:00',c.timezone??current.plan.timezone)}:c);setModal('suggestion');}
