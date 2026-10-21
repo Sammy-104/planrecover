@@ -769,3 +769,17 @@ export const t_bedrock_workflow_evidence=sqliteTable('bedrock_workflow_evidence'
  check('bedrock_evidence_scope_valid',sql`${table.scope} IN ('saved-chat-readback','saved-agent-proposal-readback','draft-preview-constructed','saved-image-receipt-readback','saved-pdf-receipt-readback')`),
  check('bedrock_evidence_time_valid',sql`${table.created_at}>=0`),
 ]);
+
+export const t_private_uploads=sqliteTable('private_uploads',{
+ id:text('id').primaryKey().notNull(),owner:text('owner').notNull(),plan_id:text('plan_id').notNull(),member_id:text('member_id').notNull(),
+ purpose:text('purpose').notNull(),file_key:text('file_key').notNull().unique(),filename:text('filename').notNull(),mime:text('mime').notNull(),
+ size:integer('size').notNull(),sha256:text('sha256').notNull(),status:text('status').notNull().default('pending'),created:integer('created').notNull(),
+ expires:integer('expires').notNull(),lease_until:integer('lease_until').notNull().default(0),deleted_at:integer('deleted_at'),result:text('result'),
+},table=>[
+ index('private_uploads_retention').on(table.owner,table.deleted_at,table.expires,table.lease_until),index('private_uploads_member').on(table.owner,table.plan_id,table.member_id,table.created),
+ check('private_uploads_purpose_valid',sql`${table.purpose} IN ('document','receipt')`),
+ check('private_uploads_mime_valid',sql`${table.mime} IN ('application/pdf','image/png','image/jpeg','image/webp')`),
+ check('private_uploads_size_valid',sql`${table.size}>0 AND ${table.size}<=8388608`),
+ check('private_uploads_hash_valid',sql`length(${table.sha256})=64`),
+ check('private_uploads_status_valid',sql`${table.status} IN ('pending','processing','used','failed')`),
+]);

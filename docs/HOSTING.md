@@ -1,28 +1,71 @@
-# Hosting from GitHub
+# Hosting and migration
 
-The repository is private source control for the full application. Pushing files here does not migrate the existing live application, its users, database, uploaded receipts or server secrets. The current private deployment remains available at [PlanRecover](https://planrecover-sandbox-oct12.solar-bee-7228.chatgpt.site).
+This public repository contains the application's frontend and backend source. Publishing source does not publish saved plans, accounts, private files or server secrets, and does not migrate the original [Site deployment](https://planrecover-sandbox-oct12.solar-bee-7228.chatgpt.site). The source now includes a separate Vercel target; deployment and hosted verification must establish its live status.
+
+## Vercel target
+
+[`vercel.json`](../vercel.json) selects native Next.js and `pnpm build:vercel`. [`scripts/build-vercel.mjs`](../scripts/build-vercel.mjs) prepares PDF assets, temporarily copies the Vercel proxy template to the ignored root `proxy.ts`, builds Next.js with webpack, and removes its generated proxy afterward. The output is `.next-vercel`, using `tsconfig.vercel.json` to keep generated route types separate from Vinext's `.next/types`.
+
+The build aliases the existing server environment to [`lib/vercel/runtime-env.ts`](../lib/vercel/runtime-env.ts) and the identity wrapper to [`platform/vercel/identity-provider.tsx`](../platform/vercel/identity-provider.tsx):
+
+- **Database:** Turso/libSQL supplies persistent SQLite through an adapter for the D1 operations used by this application. Existing repositories and financial checks retain SQL-backed storage. Builds and application startup do not run migrations.
+- **Authentication:** Clerk verifies each session. The proxy strips every incoming `oai-authenticated-user-*` header, then supplies internal identity from the verified user and verified primary email. Invalid sessions, unavailable profiles and unverified primary emails supply no application identity.
+- **Origins:** Clerk's authorized parties use exact deployment/branch origins from Vercel's system environment. Production also includes the production domain. `CLERK_AUTHORIZED_PARTIES` allows additional exact HTTPS origins; no wildcard trusts unrelated previews. Missing production origin configuration fails closed.
+- **Private files:** Private Vercel Blob replaces the object-storage binding. Short-lived scoped grants let browsers upload directly. Before attaching a file to a receipt or plan, the application rechecks membership, size, type and digest. Authorized downloads stream through application routes; receipts and documents are not public Blob files.
+
+Clerk account IDs use a separate `clerk:` namespace. Matching an email does **not** claim an old Site account or transfer plans, approvals, financial history or file access. Existing data requires a reviewed import and explicit identity mapping.
+
+## Configure and deploy to Vercel
+
+Use Node.js 24 and the pnpm version pinned in `package.json`. Link and inspect the intended Vercel team/project before pulling environment settings or applying migrations. Configure the selected environment using [`config/vercel.env.example`](../config/vercel.env.example):
+
+| Setting | Purpose |
+| --- | --- |
+| `TURSO_DATABASE_URL` | TLS libSQL/HTTPS database endpoint |
+| `TURSO_AUTH_TOKEN` | Server-side database credential |
+| `CLERK_SECRET_KEY` | Server-side Clerk credential |
+| `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | Public Clerk browser key |
+| `BLOB_READ_WRITE_TOKEN` | Server-side token for a **private** Blob store |
+| `CLERK_AUTHORIZED_PARTIES` | Optional comma-separated exact HTTPS custom-domain origins |
+
+Keep private values in Vercel settings and ignored local environment files. Only Clerk's publishable key is intended for the browser. Expose Vercel system environment variables so origin checks identify the current deployment. The build script and `vercel.json` supply hosting flags.
+
+After selecting and pulling the correct environment:
+
+```sh
+pnpm install --frozen-lockfile
+pnpm test
+pnpm typecheck
+pnpm db:migrate:vercel
+```
+
+The migration command reviews pending changes without applying them. After reviewing the database, environment and backup, apply them explicitly:
+
+```sh
+pnpm db:migrate:vercel --apply --project=<verified-project-id>
+pnpm build:vercel
+```
+
+The tool checks `.vercel/project.json`, requires its matching project ID for writes, records migration checksums and refuses to initialize a database containing unmanaged tables. Schema migration does not copy Site data.
+
+Deploy the selected source to the linked project and verify its preview before production release. Check sign-in/out, account separation, plan saving, editor/viewer access, private uploads and streamed downloads. Check provider-dependent features separately when configured. A successful build or fixture test does not establish hosted/provider verification.
+
+## Optional services and migration boundaries
+
+AWS Bedrock, SES, PayPal sandbox, supplier adapters, Web Push and external workflow services retain their optional settings in [`config/server.env.example`](../config/server.env.example), [`config/adapters.env.example`](../config/adapters.env.example) and [`config/operations.env.example`](../config/operations.env.example). Deployment does not transfer credentials, quota, verified senders, callback/webhook registrations or live status. Manual receipt review and saved-plan answers work without a live AI provider.
+
+PayPal remains sandbox-only. Deliberately register new approved destinations and retain signature/duplicate-event checks before verifying payments, refunds and invoices. Webhook and scheduled-runner routes remain reachable without a Clerk visitor session; their provider signatures or service credentials enforce access.
+
+**No Vercel cron schedule is configured.** Deployment does not enable reminder delivery, scheduled cleanup or a background runner. Configure and verify those operational paths separately, including service access and saved enabled state. The Site's request-scoped connected-app capabilities are not automatically available on Vercel.
+
+Keep the original deployment and backups available during cutover. Imports must preserve provider IDs, immutable financial records, approval history, membership and object references. Verify database/file restoration and explicit old-to-new identity mappings before moving existing users.
+
+## Original Site/Cloudflare target
+
+`pnpm build` still uses Vinext/Vite with a Cloudflare Worker, D1 binding `DB` and private R2 binding `BUCKET`. `pnpm db:migrate:local` and `pnpm start` use local storage; `pnpm dev` retains loopback-only mock sign-in. The default identity wrapper is a no-op, preserving the Site gateway's authenticated identity.
+
+`.openai/hosting.json` preserves the original Site/binding metadata and contains no server credentials. Publishing that deployment still uses its supported Site workflow. A GitHub push does not itself update the Site. Select the intended source revision so an older mirror cannot replace newer work.
 
 ## GitHub Pages
 
-GitHub Pages publishes static HTML/CSS/JavaScript; it does not run the server/API routes, database, private receipt storage, webhook verification or payment reconciliation in this project. The user selected a full-source repository for backend-capable hosting rather than a static preview. [GitHub Pages documentation](https://docs.github.com/en/pages/getting-started-with-github-pages/creating-a-github-pages-site).
-
-## Existing supported hosting
-
-The current build uses Vinext/Vite with a Cloudflare Worker, D1 binding `DB` and private R2 binding `BUCKET`. `.openai/hosting.json` preserves the existing Site identity/bindings; it is metadata, not a secret. The original Site workflow also provides authenticated visitor identity and request-scoped connected-app capabilities. Keep using that supported workflow to update the existing deployment.
-
-GitHub is a source mirror unless an explicit synchronization/deployment integration is configured. A push here currently does not publish the Site. Later development should deliberately select which repository is authoritative and synchronize changes before publishing, to avoid replacing newer changes with an older snapshot.
-
-## Moving to another backend host
-
-Cloudflare Workers is compatible with the current runtime model, but the exported application is not a ready-made unauthenticated public Worker. A migration needs these concrete steps:
-
-1. Select the hosting account and domain; confirm its plan/cost constraints. No cloud resources or paid hosting are created by this source import.
-2. Add a trusted authentication gateway or verified session integration and map its verified identities into the existing membership model. The current `oai-authenticated-user-*` headers are trusted because the Site gateway supplies them. **Never accept those headers directly from public callers on a standalone deployment.** Preserve existing identity mappings so historical obligations do not move to another user. Replace the Site sign-in routes and connected-app binding where applicable.
-3. Configure an actual D1 database and private R2 bucket. The starter's placeholder database ID is for local development. Review `vite.config.ts` and the generated `dist/server/wrangler.json` before configuring a new Worker. Migrate data through supported database/object-storage backup and import tools; repository files contain no production data.
-4. Install the pinned dependencies and build with `pnpm build`. Run all tests and type checking. Use Node 24 for the SQLite-backed regression suites. All tests use injected provider fixtures; running them does not verify live providers.
-5. Apply every additive `drizzle/` migration to the selected database before serving the matching code. Preserve immutable financial records, provider IDs, approval history and object references. Verify backups and restore behavior before moving real saved plans.
-6. Enter provider credentials only in the new platform's private secret settings. `config/server.env.example` and `config/adapters.env.example` list the names. Reconfigure the PayPal sandbox SDK origin, allowed callbacks and webhook registration for the selected deployment. Keep sandbox-only gates in place.
-7. Update absolute deployment references (for example, the relay destination, private background-runner allowlist and agent-skill links) deliberately. Configure the separate public webhook receiver only after the private authenticated app is ready. Keep the existing Site private until a different audience is explicitly requested.
-8. Run hosted identity/membership, receipt privacy, duplicate-event, payment/refund and invoice checks. Re-enable a background schedule only after service access and the saved enabled state are verified. Then switch the chosen domain/entrypoint and retain a rollback route.
-
-The source import neither provisions these resources nor enables automatic deployment. No credentials are needed to browse the code or run offline tests.
+GitHub Pages serves static HTML/CSS/JavaScript. It cannot run this application's APIs, database, private file access, AI calls, webhook verification or payment reconciliation. An intentionally separate static demo could show a limited frontend but would not replace either full application target. See [GitHub Pages documentation](https://docs.github.com/en/pages/getting-started-with-github-pages/what-is-github-pages).

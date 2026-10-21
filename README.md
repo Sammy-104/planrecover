@@ -2,7 +2,7 @@
 
 Full application source for the Paypal + Amazon Hackathon project: shared planning, per-person approvals, PayPal sandbox payments, recovery workflows and receipt review.
 
-The application is currently live at [PlanRecover](https://planrecover-sandbox-oct12.solar-bee-7228.chatgpt.site). This repository stores its complete frontend and backend source. **GitHub Pages cannot run this backend.** See [hosting and migration](docs/HOSTING.md) before selecting another deployment target.
+The original Site deployment is available at [PlanRecover](https://planrecover-sandbox-oct12.solar-bee-7228.chatgpt.site). This public repository contains the complete frontend/backend source and a Vercel target using native Next.js, Turso, Clerk and private Vercel Blob. A build or source push does not migrate accounts, plans, files or provider settings. **GitHub Pages cannot run this backend.** See [hosting and migration](docs/HOSTING.md) for setup and verification.
 
 ## Run locally
 
@@ -17,7 +17,15 @@ pnpm db:migrate:local
 pnpm start
 ```
 
-The local migration command changes local development storage only. Private provider settings belong in ignored `.dev.vars` or the deployed platform's secret settings; [config/server.env.example](config/server.env.example) and [config/adapters.env.example](config/adapters.env.example) contain setting names only. The source works with manual receipt review and saved-plan answers when AI providers are unavailable. Local development can also use `pnpm dev` with the starter's loopback-only mock sign-in.
+These commands use the original Vinext/Cloudflare runtime and local storage. The local migration command changes local development storage only. Private provider settings belong in ignored `.dev.vars` or the deployed platform's secret settings; [config/server.env.example](config/server.env.example) and [config/adapters.env.example](config/adapters.env.example) contain setting names only. The source works with manual receipt review and saved-plan answers when AI providers are unavailable. Local development can also use `pnpm dev` with the starter's loopback-only mock sign-in.
+
+## Vercel hosting
+
+[`vercel.json`](vercel.json) runs `pnpm build:vercel`, which builds native Next.js without changing the original Cloudflare target. The Vercel runtime uses a Turso/libSQL adapter for the application's D1 database operations, verified Clerk sessions with exact allowed origins, and private Blob storage with direct uploads and authenticated streaming downloads.
+
+Link and verify the intended Vercel project, configure the names in [config/vercel.env.example](config/vercel.env.example) privately, then review `pnpm db:migrate:vercel`. Applying migrations requires `--apply --project=<verified-project-id>`; builds never apply them automatically. Run tests and type checking, build with `pnpm build:vercel`, and verify a hosted preview before release. [The hosting guide](docs/HOSTING.md) covers the sequence and migration boundaries.
+
+Clerk users have a separate identity namespace: an email match does not transfer an existing Site account or its plans. Existing saved data and files need an explicit import. AWS/PayPal/email credentials and registrations remain separate optional setup, and no Vercel cron schedule is enabled by this deployment configuration.
 
 ## What is included
 
@@ -28,6 +36,7 @@ The local migration command changes local development storage only. Private prov
 - `services/paypal-relay/`: separately deployable, disabled-by-default PayPal webhook receiver, offline tests and cutover guide.
 - `docs/project-records/`: implementation/audit/testing records. Historical reports are preserved as evidence and may describe earlier releases.
 - `.openai/hosting.json`, `build/`, `scripts/`: original Site/Cloudflare build and hosting integration.
+- `platform/vercel/`, `lib/vercel/`, `vercel.json`: native Next.js Vercel target, verified identity, database compatibility and private file adapters.
 
 The first source import is based on application commit `8bd3ed44d97fea2948234eccaa1f4f4ca2f909ab` (Site version 14). See [source provenance](config/source-export.json) for later imports. The original beta walkthrough is retained in [README-HISTORICAL.md](README-HISTORICAL.md).
 
@@ -50,4 +59,4 @@ node --experimental-transform-types --disable-warning=ExperimentalWarning servic
 
 These checks use fixtures and the application's actual migrated webhook inbox. Deployment of the relay remains a separate explicit action; [its guide](services/paypal-relay/README.md) explains configuration and rollback.
 
-This is a clean source snapshot. Credentials, real customer/payment/receipt data, local databases, dependency folders, generated builds, screenshots, source archives and duplicate historical checkouts are excluded. Synced project attachments were preserved locally and are not deployment source.
+Credentials, real customer/payment/receipt data, local databases, dependency folders, generated builds, screenshots, source archives and duplicate historical checkouts are excluded from the public source. Synced project attachments were preserved locally and are not deployment source.

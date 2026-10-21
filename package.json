@@ -12,12 +12,17 @@
     "install:ci": "node scripts/install-dependencies.mjs",
     "dev": "node scripts/prepare-booking-pdf.mjs && node scripts/run-framework.mjs dev",
     "build": "node scripts/prepare-booking-pdf.mjs && node scripts/run-framework.mjs build",
+    "build:vercel": "node scripts/build-vercel.mjs",
+    "db:migrate:vercel": "node scripts/migrate-vercel.mjs",
     "start": "node scripts/start-local.mjs",
     "test:mcp:local": "node scripts/smoke-mcp.mjs",
-    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
+    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern .next-vercel",
     "db:generate": "drizzle-kit generate"
   },
   "dependencies": {
+    "@clerk/nextjs": "7.9.14",
+    "@libsql/client": "0.18.0",
+    "@vercel/blob": "2.8.1",
     "@base-ui/react": "^1.7.0",
     "@block65/webcrypto-web-push": "2.0.0",
     "@hookform/resolvers": "^5.7.1",

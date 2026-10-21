@@ -6,7 +6,8 @@ import {PlanRepository,visibleWorkspace} from './plan-repository';
 import {BackendError} from './backend-errors';
 import {bedrockConfig} from './bedrock';
 export function db(){if(!env.DB)throw Error('Saved workspace unavailable. Please try again.');return env.DB;}
-export function owner(request:Request){const id=request.headers.get('oai-authenticated-user-id');if(id)return id;const url=new URL(request.url);if(['terminal.local','localhost','127.0.0.1'].includes(url.hostname))return 'local-beta-testing';throw Error('Sign in to access your saved workspace.');}
+function loopbackPreview(request:Request){const deployed=typeof process!=='undefined'&&(process.env.PLANRECOVER_HOSTING==='vercel'||!!process.env.VERCEL);return !deployed&&['terminal.local','localhost','127.0.0.1'].includes(new URL(request.url).hostname);}
+export function owner(request:Request){const id=request.headers.get('oai-authenticated-user-id');if(id)return id;if(loopbackPreview(request))return 'local-beta-testing';throw Error('Sign in to access your saved workspace.');}
 export function checkOrigin(request:Request){const origin=request.headers.get('origin');if(origin&&origin!==new URL(request.url).origin)throw Error('This request must come from the app.');}
 export async function loadState(id:string,identity?:Identity):Promise<State>{
  const repository=new PlanRepository(db());
@@ -28,7 +29,7 @@ export async function saveState(id:string,state:State,expected:number){return ne
 export type WorkspaceAccess={id:string;user?:Identity;share?:{tokenHash:string;tripId:string;role:'viewer'|'editor'}};
 export async function tokenHash(token:string){const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(token));return Array.from(new Uint8Array(bytes),b=>b.toString(16).padStart(2,'0')).join('');}
 export async function workspaceAccess(request:Request):Promise<WorkspaceAccess>{
- const account=request.headers.get('oai-authenticated-user-id')??(['terminal.local','localhost','127.0.0.1'].includes(new URL(request.url).hostname)?'local-beta-testing':null);
+ const account=request.headers.get('oai-authenticated-user-id')??(loopbackPreview(request)?'local-beta-testing':null);
  let displayName=request.headers.get('oai-authenticated-user-email')??'Plan owner';const full=request.headers.get('oai-authenticated-user-full-name');if(full&&request.headers.get('oai-authenticated-user-full-name-encoding')==='percent-encoded-utf-8'){try{displayName=decodeURIComponent(full);}catch{}}
  const user=account?{id:await accountPersonId(account),name:displayName.slice(0,60)}:undefined;
  const token=request.headers.get('x-trip-share');

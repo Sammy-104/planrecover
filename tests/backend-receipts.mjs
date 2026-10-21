@@ -53,6 +53,28 @@ try{
   await decoded(await routes.receipt.GET(request(`/api/receipt?draftId=${uploaded.draft.id}`,'GET',undefined,{account:other})),404);
   await decoded(await routes.receipt.GET(request(`/api/receipt?key=${encodeURIComponent(uploaded.draft.fileKey)}`,'GET',undefined,{account:other})),403);
  });
+ await check('Receipt byte access rejects unrelated objects and requires a current authenticated member',async({database,objects,repository,state})=>{
+  const uploaded=await upload(state,{mime:'application/pdf'}),key=uploaded.draft.fileKey,path=`/api/receipt?key=${encodeURIComponent(key)}`;
+  const original=await routes.receipt.GET(request(path));assert.equal(original.status,200);assert.match(original.headers.get('Cache-Control'),/private, no-store/);assert.match(await original.text(),/^%PDF-/);
+  const documentKey=key.replace('/','/documents/'),stagingKey=key.replace('/','/uploads/'),unreferenced=key.slice(0,key.indexOf('/')+1)+crypto.randomUUID();
+  for(const otherKey of [documentKey,stagingKey,unreferenced])objects.set(otherKey,objects.get(key));
+  for(const otherKey of [documentKey,stagingKey])await decoded(await routes.receipt.GET(request(`/api/receipt?key=${encodeURIComponent(otherKey)}`)),403);
+  await decoded(await routes.receipt.GET(request(`/api/receipt?key=${encodeURIComponent(unreferenced)}`)),404);
+  const rootState=await repository.loadWorkspace(owner);rootState.people.push(makePerson(bob.id,bob.name,'viewer'));await repository.saveWorkspace(owner,rootState,rootState.version);
+  const token='b'.repeat(64),hash=Buffer.from(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(token))).toString('hex');
+  database.sqlite.prepare('INSERT INTO trip_links(token_hash,token,owner,trip_id,role,created,expires) VALUES (?,?,?,?,?,?,?)').run(hash,token,owner,state.plan.id,'viewer',new Date().toISOString(),new Date(Date.now()+3600000).toISOString());
+  const shared=await routes.receipt.GET(request(path,'GET',undefined,{account:other,token}));assert.equal(shared.status,200);assert.match(await shared.text(),/^%PDF-/);
+  await decoded(await routes.receipt.GET(request(path,'GET',undefined,{account:null,token})),401);
+  database.sqlite.prepare("UPDATE plan_members SET role='legacy' WHERE owner=? AND plan_id=? AND member_id=?").run(owner,state.plan.id,bob.id);
+  await decoded(await routes.receipt.GET(request(path,'GET',undefined,{account:other,token})),404);
+  database.sqlite.prepare("UPDATE plan_members SET role='viewer' WHERE owner=? AND plan_id=? AND member_id=?").run(owner,state.plan.id,bob.id);
+  database.sqlite.prepare("UPDATE receipt_objects SET status='deleting' WHERE file_key=?").run(key);
+  await decoded(await routes.receipt.GET(request(path)),404);
+  database.sqlite.prepare("UPDATE receipt_objects SET status='ready' WHERE file_key=?").run(key);
+  const read=globalThis.receiptTestEnv.BUCKET.get;
+  globalThis.receiptTestEnv.BUCKET.get=async fileKey=>{const file=await read(fileKey);database.sqlite.prepare('DELETE FROM trip_links WHERE token_hash=?').run(hash);return file;};
+  await decoded(await routes.receipt.GET(request(path,'GET',undefined,{account:other,token})),404);
+ });
  await check('Bedrock sees an already persisted source and preserves unreadable amounts as null',async({database,objects,repository,state})=>{
   configured();let calls=0;
   provider=async(url)=>{calls++;assert.match(String(url),/^https:\/\/bedrock-runtime\.us-east-1\.amazonaws\.com\//);assert.equal(objects.size,1);const row=database.sqlite.prepare('SELECT status,source_facts FROM receipt_drafts').get();assert.equal(row.status,'extracting');assert.equal(row.source_facts,null);return modelResponse({...facts,items:[{name:'Meal',amountCents:null}],tipCents:null});};

@@ -1,0 +1,61 @@
+import assert from 'node:assert/strict';
+import {clerkAuthorizedParties,stripIdentityHeaders,verifiedProfileIdentity,verifiedRequestHeaders,profileIdentityCache,safeReturnTo,legacyAuthDestination} from '../platform/vercel/identity.ts';
+
+const supplied=new Headers({'OAI-Authenticated-User-ID':'victim','oai-authenticated-user-email':'victim@example.test','oai-authenticated-user-custom':'spoof','authorization':'Bearer provider-service-key','paypal-transmission-id':'provider-delivery'});
+const clean=stripIdentityHeaders(supplied);
+assert.equal([...clean.keys()].some(name=>name.startsWith('oai-authenticated-user-')),false);
+assert.equal(clean.get('authorization'),'Bearer provider-service-key');
+assert.equal(clean.get('paypal-transmission-id'),'provider-delivery');
+assert.equal(supplied.get('oai-authenticated-user-id'),'victim','Sanitization does not modify the caller object.');
+
+const profile={id:'user_Alice1',primaryEmailAddressId:'email_main',emailAddresses:[{id:'email_main',emailAddress:'alice@example.test',verification:{status:'verified'}},{id:'email_secondary',emailAddress:'other@example.test',verification:{status:'verified'}}],firstName:'Alice',lastName:'François'};
+const verified=verifiedProfileIdentity('user_Alice1',profile);
+assert.equal(verified.id,'clerk:user_Alice1');
+assert.equal(verified.email,'alice@example.test');
+assert.equal(verifiedProfileIdentity('user_Another',profile),null);
+assert.equal(verifiedProfileIdentity(profile.id,{...profile,banned:true}),null);
+assert.equal(verifiedProfileIdentity(profile.id,{...profile,locked:true}),null);
+assert.equal(verifiedProfileIdentity(profile.id,{...profile,primaryEmailAddressId:null}),null);
+assert.equal(verifiedProfileIdentity(profile.id,{...profile,emailAddresses:profile.emailAddresses.map(email=>email.id==='email_main'?{...email,verification:{status:'unverified'}}:email)}),null,'A verified secondary address cannot replace an unverified primary.');
+
+let loads=0;
+const anonymous=await verifiedRequestHeaders(supplied,null,async()=>{loads++;return verified;});
+assert.equal(loads,0,'An unauthenticated request never looks up a caller-supplied identity.');
+assert.equal(anonymous.get('oai-authenticated-user-id'),null);
+assert.equal((await verifiedRequestHeaders(supplied,profile.id,async()=>{throw Error('Provider unavailable');})).get('oai-authenticated-user-id'),null);
+assert.equal((await verifiedRequestHeaders(supplied,profile.id,async()=>null)).get('oai-authenticated-user-email'),null);
+assert.equal((await verifiedRequestHeaders(supplied,profile.id,async()=>({...verified,id:'clerk:user_Another'}))).get('oai-authenticated-user-id'),null);
+const authenticated=await verifiedRequestHeaders(supplied,profile.id,async()=>verified);
+assert.equal(authenticated.get('oai-authenticated-user-id'),'clerk:user_Alice1');
+assert.equal(authenticated.get('oai-authenticated-user-email'),'alice@example.test');
+assert.equal(decodeURIComponent(authenticated.get('oai-authenticated-user-full-name')),'Alice François');
+assert.equal(authenticated.get('oai-authenticated-user-custom'),null);
+
+let now=1000,calls=0,blocked=false;
+const cache=profileIdentityCache(async()=>{calls++;if(blocked)throw Error('Unavailable');return profile;},{now:()=>now,ttlMs:30,maxEntries:1});
+await Promise.all([cache(profile.id),cache(profile.id)]);assert.equal(calls,1,'Concurrent reads share one bounded profile fetch.');
+await cache(profile.id);assert.equal(calls,1);
+now+=31;blocked=true;assert.equal(await cache(profile.id),null,'An expired identity cannot survive a failed provider check.');
+blocked=false;assert.equal((await cache(profile.id)).id,'clerk:user_Alice1');assert.equal(calls,3,'Lookup failures are not cached indefinitely.');
+let synchronousCalls=0;
+const recovering=profileIdentityCache(()=>{if(++synchronousCalls===1)throw Error('Immediate failure');return Promise.resolve(profile);});
+assert.equal(await recovering(profile.id),null);assert.ok(await recovering(profile.id));
+let boundedCalls=0;
+const bounded=profileIdentityCache(async id=>{boundedCalls++;return {...profile,id};},{maxEntries:1});
+await bounded('user_First');await bounded('user_Second');await bounded('user_First');assert.equal(boundedCalls,3,'The profile cache cannot grow beyond its entry limit.');
+let hanging=true;
+const timed=profileIdentityCache(()=>hanging?new Promise(()=>{}):Promise.resolve(profile),{timeoutMs:5});
+assert.equal(await timed(profile.id),null,'Profile lookups fail closed within a bounded interval.');
+hanging=false;assert.ok(await timed(profile.id),'A timed-out lookup cannot pin the account to a failed result.');
+
+assert.equal(safeReturnTo('/#trip=abc'),'/'+'#trip=abc');
+assert.equal(safeReturnTo('/flows?plan=test#invoices'),'/flows?plan=test#invoices');
+for(const target of [null,['/ok'],'https://evil.test','//evil.test','/\\evil.test','/%2f%2fevil.test','/%5cevil.test','/%0aevil','/sign-in','/sign-up/verify','/sign-out?return_to=/','/callback','/foo/../sign-in','/signin-with-chatgpt'])assert.equal(safeReturnTo(target),'/',String(target));
+const redirect=legacyAuthDestination(new URL('https://planrecover.example/signin-with-chatgpt?return_to=https%3A%2F%2Fevil.test'));
+assert.equal(redirect.origin,'https://planrecover.example');assert.equal(redirect.pathname,'/sign-in');assert.equal(redirect.searchParams.get('return_to'),'/');
+assert.equal(legacyAuthDestination(new URL('https://planrecover.example/api/webhooks/paypal')),null);
+assert.deepEqual(clerkAuthorizedParties({NODE_ENV:'production'}),[],'Missing deployment origins cannot silently authorize arbitrary parties.');
+assert.deepEqual(clerkAuthorizedParties({NODE_ENV:'production',VERCEL_ENV:'preview',VERCEL_URL:'plan-hash-team.vercel.app',VERCEL_BRANCH_URL:'plan-git-test-team.vercel.app',VERCEL_PROJECT_PRODUCTION_URL:'planrecover.example'}),['https://plan-hash-team.vercel.app','https://plan-git-test-team.vercel.app'],'Preview origins do not include production or a wildcard for other previews.');
+assert.deepEqual(clerkAuthorizedParties({NODE_ENV:'production',VERCEL_ENV:'production',VERCEL_URL:'plan-hash-team.vercel.app',VERCEL_PROJECT_PRODUCTION_URL:'planrecover.example',CLERK_AUTHORIZED_PARTIES:'https://planrecover.example,https://other.example,https://*.vercel.app,https://bad.example/path,https://user@bad.example,http://localhost:3000'}),['https://planrecover.example','https://other.example','https://plan-hash-team.vercel.app']);
+assert.deepEqual(clerkAuthorizedParties({NODE_ENV:'development'}),['http://localhost:3000','http://127.0.0.1:3000']);
+console.log('PASS Vercel identity: spoofed headers stripped, anonymous failures closed, verified primary email only, bounded cache and isolated auth return URLs.');

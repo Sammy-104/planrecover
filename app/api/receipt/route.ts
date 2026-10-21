@@ -8,6 +8,10 @@ import { ReceiptDraftRepository,draftReceipt,receiptReviewFields,type ReceiptDra
 import { extractReceipt } from '@/lib/receipt-extraction';
 import { acquireAiLease } from '@/lib/ai-usage';
 import {confirmReceiptBedrockReadback} from '@/lib/receipt-bedrock-evidence';
+import {consumePrivateUpload,privateUploadRuntime,type PrivateUploadPublication} from '@/lib/private-uploads';
+import {invoiceJson} from '@/lib/plan-invoices';
+import {authorizeReceiptSource} from '@/lib/receipt-source-access';
+import {publishReceiptSource} from '@/lib/receipt-source-publication';
 
 const privateHeaders={'Cache-Control':'private, no-store'};
 const reviewRequest=z.object({
@@ -31,17 +35,14 @@ export async function GET(request: Request) {
     const url=new URL(request.url),key=url.searchParams.get('key');
     if(key){
       const access=await workspaceAccess(request);
-      if(!key.startsWith(`${await prefix(access.id)}/`))throw new BackendError('RECEIPT_ACCESS','Receipt unavailable.',403);
-      if(access.share){
-        const state=await loadAccess(access);
-        if(!state.receipts.some(receipt=>receipt.fileKey===key)){
-          const current=await context(request);
-          await current.repository.byFile(current.scope,key);
-        }
-      }
+      const source=await authorizeReceiptSource(db(),access,key);
       if(!env.BUCKET)throw Error('Receipt storage unavailable.');
       const file=await env.BUCKET.get(key);
       if(!file)return new Response('Not found',{status:404,headers:privateHeaders});
+      try{
+        const fresh=await authorizeReceiptSource(db(),access,key);
+        if(fresh.owner!==source.owner||fresh.planId!==source.planId)throw new BackendError('RECEIPT_UNAVAILABLE','This receipt source is unavailable or access changed.',404);
+      }catch(error){try{await file.body.cancel();}catch{/* Already closed or a fixture body. */}throw error;}
       return new Response(file.body,{headers:{...privateHeaders,'Content-Type':file.httpMetadata?.contentType??'application/octet-stream','X-Content-Type-Options':'nosniff'}});
     }
     const current=await context(request),draftId=url.searchParams.get('draftId'),fileKey=url.searchParams.get('draftFileKey');
@@ -56,28 +57,32 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     checkOrigin(request);
-    const current=await context(request,true),form=await request.formData(),file=form.get('file');
+    const current=await context(request,true);
+    if(!env.BUCKET)throw Error('Receipt storage unavailable.');
+    const direct=privateUploadRuntime()&&request.headers.get('content-type')?.startsWith('application/json');
+    const publish=async(file:{bytes:Uint8Array;mime:string;publication?:PrivateUploadPublication})=>{
+      const {bytes,mime}=file;
+      let draft=await publishReceiptSource(db(),env.BUCKET!,current.repository,current.scope,file,saved=>({...current.response(saved),note:saved.warnings.join(' · ')}));
+      // Save the source and durable draft before either model is invoked.
+      draft=await current.repository.extracting(current.scope,draft.id,draft.version);
+      const result=await extractReceipt(env as unknown as Record<string,unknown>,{mime,bytes},planCurrency(current.state.plan),{
+        acquire:()=>acquireAiLease(db(),current.scope.memberId,'receipt-extraction'),tracking:{database:db(),...current.scope},
+      });
+      draft=await current.repository.extracted(current.scope,draft.id,draft.version,result);
+      await confirmReceiptBedrockReadback(db(),env as unknown as Record<string,unknown>,current.scope,draft,result.bedrockOperationId);
+      return {...current.response(draft),note:draft.warnings.join(' · ')};
+    };
+    if(direct){
+      const body=z.object({tripId:z.string().min(1).max(180),uploadId:z.string().uuid()}).strict().parse(await invoiceJson(request,1000));
+      if(body.tripId!==current.state.plan.id)throw new BackendError('PLAN_CHANGED','The active plan changed. Refresh before uploading receipts.',409);
+      return Response.json(await consumePrivateUpload(db(),env.BUCKET,current.access.user!,body.tripId,'receipt',body.uploadId,publish,{resolve:async saved=>{const draft=await current.repository.get(current.scope,saved.draft.id);return {...current.response(draft),note:draft.warnings.join(' · ')};}}),{headers:privateHeaders});
+    }
+    const form=await request.formData(),file=form.get('file');
     if(!(file instanceof File)||!['image/png','image/jpeg','image/webp','application/pdf'].includes(file.type)||file.size===0||file.size>8*1024*1024)
       throw new BackendError('INVALID_RECEIPT_FILE','Upload a PNG, JPEG, WebP or PDF receipt under 8 MB.');
     if(form.get('tripId')&&form.get('tripId')!==current.state.plan.id)
       throw new BackendError('PLAN_CHANGED','The active plan changed. Refresh before uploading receipts.',409);
-    if(!env.BUCKET)throw Error('Receipt storage unavailable.');
-    const bytes=new Uint8Array(await file.arrayBuffer()),key=`${await prefix(current.access.id)}/${crypto.randomUUID()}`,sourceHash=await sourceDigest(bytes);
-    await db().prepare("INSERT INTO receipt_objects(file_key,owner,plan_id,status,created,source_sha256) VALUES (?,?,?,'staged',?,?)").bind(key,current.scope.owner,current.scope.planId,new Date().toISOString(),sourceHash).run();
-    await env.BUCKET.put(key,bytes,{httpMetadata:{contentType:file.type}});
-    let draft;
-    try {draft=await current.repository.create(current.scope,{fileKey:key,mime:file.type,size:file.size});}
-    catch(error){try{await env.BUCKET.delete(key);}catch{/* Cleanup can be retried separately. */}throw error;}
-    await db().prepare("UPDATE receipt_objects SET status='ready' WHERE file_key=? AND owner=? AND plan_id=? AND status='staged'").bind(key,current.scope.owner,current.scope.planId).run();
-    // Save the source and durable draft before either model is invoked.
-    draft=await current.repository.extracting(current.scope,draft.id,draft.version);
-    const result=await extractReceipt(env as unknown as Record<string,unknown>,{mime:file.type,bytes},planCurrency(current.state.plan),{
-      acquire:()=>acquireAiLease(db(),current.scope.memberId,'receipt-extraction'),
-      tracking:{database:db(),...current.scope},
-    });
-    draft=await current.repository.extracted(current.scope,draft.id,draft.version,result);
-    await confirmReceiptBedrockReadback(db(),env as unknown as Record<string,unknown>,current.scope,draft,result.bedrockOperationId);
-    return Response.json({...current.response(draft),note:draft.warnings.join(' · ')},{headers:privateHeaders});
+    return Response.json(await publish({bytes:new Uint8Array(await file.arrayBuffer()),mime:file.type}),{headers:privateHeaders});
   }catch(error){return apiError(error);}
 }
 export async function PATCH(request: Request) {
@@ -89,12 +94,4 @@ export async function PATCH(request: Request) {
     const draft=await current.repository.review(current.scope,body.draftId,body.version,current.state,body.receipt,body.resolvedFields,body.currency);
     return Response.json(current.response(draft),{headers:privateHeaders});
   }catch(error){return apiError(error);}
-}
-async function prefix(id: string) {
-  const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(id));
-  return Array.from(new Uint8Array(digest),value=>value.toString(16).padStart(2,'0')).join('');
-}
-async function sourceDigest(bytes:Uint8Array){
-  const digest=await crypto.subtle.digest('SHA-256',bytes as BufferSource);
-  return Array.from(new Uint8Array(digest),value=>value.toString(16).padStart(2,'0')).join('');
 }

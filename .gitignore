@@ -17,6 +17,7 @@
 
 # next.js
 /.next/
+/.next-vercel/
 /.vinext/
 /out/
 
@@ -36,6 +37,7 @@ yarn-error.log*
 
 # vercel
 .vercel
+/proxy.ts
 
 # typescript
 next-env.d.ts
