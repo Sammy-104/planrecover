@@ -1,0 +1,17 @@
+import assert from 'node:assert/strict';
+import {initialState,applyAction} from '../lib/model.ts';
+import {initializePeople} from '../lib/people.ts';
+import {workspacePlanSelection} from '../lib/workspace-plan-link.ts';
+const person={id:'signed-in-owner',name:'Owner'},state=initialState();state.plan={...state.plan,id:'current',template:'custom'};initializePeople(state,person);
+const archived=structuredClone(state);archived.plan={...archived.plan,id:'requested',name:'Requested plan'};delete archived.archives;state.archives=[{id:'requested',workspace:archived}];
+const access={signedIn:true,shared:false,hasShareToken:false,canEdit:true,memberId:person.id};
+assert.deepEqual(workspacePlanSelection('?plan=requested',state,access),{planId:'requested',status:'select'});
+const selected=applyAction(state,{type:'select_trip',actor:person.id,tripId:'requested'});assert.equal(selected.plan.id,'requested');assert.deepEqual(selected.events,archived.events,'Opening a retained plan cannot invent financial effects.');
+assert.deepEqual(workspacePlanSelection('?plan=current',state,access),{planId:'current',status:'current'});
+assert.equal(workspacePlanSelection('?plan=requested&receipt=scan',state,access),null,'The existing receipt deep-link effect owns receipt navigation.');
+for(const search of ['?plan=requested&plan=current','?plan=../../another','?view=money'])assert.equal(workspacePlanSelection(search,state,access),null);
+assert.equal(workspacePlanSelection('?plan=requested',state,{...access,signedIn:false}),null);
+for(const flags of [{shared:true},{hasShareToken:true},{canEdit:false},{memberId:'unknown'}])assert.equal(workspacePlanSelection('?plan=requested',state,{...access,...flags}).status,'unavailable');
+assert.equal(workspacePlanSelection('?plan=other-owner-plan',state,access).status,'unavailable','A query alone never grants access to another account’s workspace.');
+const viewer=structuredClone(state);viewer.archives[0].workspace.people[0].role='viewer';assert.equal(workspacePlanSelection('?plan=requested',viewer,access).status,'unavailable','The legacy selector cannot bypass a target’s viewing-only role.');viewer.people[0].role='viewer';assert.equal(workspacePlanSelection('?plan=current',viewer,{...access,canEdit:false}).status,'current','A current read-only plan remains viewable.');
+console.log('PASS Full workspace plan links: exact retained-plan selection, authenticated target membership, read-only/shared scope, receipt delegation and unchanged financial history.');

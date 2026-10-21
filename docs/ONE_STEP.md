@@ -1,0 +1,13 @@
+# One step
+
+The connected One step layout is the default website frontend at `/`. Its canonical links use `/?view=recovery`; `/one-step?view=recovery` remains available as an alias. Available views are `home`, `overview`, `itinerary`, `recovery`, `money`, and `group`. A `plan` query parameter selects an accessible saved plan without changing the detailed workspace's selected plan. The detailed workspace remains available at `/workspace`; existing invitation and receipt links continue there.
+
+`GET /api/one-step` bootstraps the authenticated profile, accessible plan summaries, and public PayPal configuration. Plan details and mutations use the existing plan, discussion, recovery, invitation, and checkout APIs on the same origin. No separate database, cross-origin credentials, or runtime secrets are introduced.
+
+Recovery compares current saved activities, saves immutable terms only after review, records each affected member's approval, and requires a separate owner action to apply. Paid bookings that need supplier cancellation remain awaiting cancellation. New replacement activities are drafts. Existing receipt, invoice, and detailed booking reviews open their established workspace screens with the selected plan.
+
+Sample plans with fictional people remain read-only in this layout. Personal plans use actual signed-in membership and existing role checks. Version conflicts refresh the plan and invalidate comparisons and confirmation checkboxes.
+
+Validation: TypeScript and all 100 application suites pass, including the local transport suite rerun with loopback networking enabled. The 11 One step checks cover identity, plan isolation, currency units, draft persistence, version conflicts, discussions, exact recovery terms, approvals, application, and money projections. Routing checks preserve invitation fragments and receipt intents, and verify authenticated selection of eligible retained plans in the detailed workspace. The original isolated browser walkthrough verified plan creation, a replacement proposal, separate approval and application, discussion persistence, and reloaded itinerary and money views. Provider traffic was intercepted in tests; no live payments or messages were sent. Hosted checks are recorded separately from fixture coverage.
+
+The design gallery's One step selection links to the original Site app. The Vercel deployment uses the same connected design with its own Clerk sign-in, Turso database and private file storage. Importing the frontend does not migrate Site users, saved data or provider credentials. The other seven layouts remain illustrative design explorations.

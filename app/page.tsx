@@ -1,2 +1,3 @@
-import Workbench from './Workbench';
-export default function Page(){return <Workbench/>;}
+import RootEntry from './RootEntry';
+import './one-step/one-step.css';
+export default function Page(){return <RootEntry/>;}

@@ -2,7 +2,7 @@
 
 Full application source for the Paypal + Amazon Hackathon project: shared planning, per-person approvals, PayPal sandbox payments, recovery workflows and receipt review.
 
-The original Site deployment is available at [PlanRecover](https://planrecover-sandbox-oct12.solar-bee-7228.chatgpt.site). This public repository contains the complete frontend/backend source and a Vercel target using native Next.js, Turso, Clerk and private Vercel Blob. A build or source push does not migrate accounts, plans, files or provider settings. **GitHub Pages cannot run this backend.** See [hosting and migration](docs/HOSTING.md) for setup and verification.
+The application is live at [PlanRecover on Vercel](https://planrecover-drift-dev1.vercel.app). The One step interface opens at the website root; the detailed workspace remains available at `/workspace`. This public repository contains the complete frontend/backend source and a Vercel target using native Next.js, Turso, Clerk and private Vercel Blob. A build or source push does not migrate accounts, plans, files or provider settings. **GitHub Pages cannot run this backend.** See [hosting and migration](docs/HOSTING.md) for setup and verification.
 
 ## Run locally
 
