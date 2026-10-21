@@ -1,9 +1,10 @@
 type JsonRequest=(url:string,init?:RequestInit)=>Promise<any>;
 type Pending={uploadId?:string;until:number;flight?:Promise<any>};
 const pending=new Map<string,Pending>(),MAX_PENDING=8,RECOVERY_MS=24*60*60*1000;
+let preparations=new WeakMap<File,Map<string,Promise<any>>>(),accountEpoch=0;
 const digest=async(bytes:BufferSource)=>Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)),b=>b.toString(16).padStart(2,'0')).join('');
 /** Page/auth redirects must not carry a previous account's unfinished uploads. */
-export function clearPendingPrivateUploads(){pending.clear();}
+export function clearPendingPrivateUploads(){pending.clear();preparations=new WeakMap();accountEpoch++;}
 if(typeof window!=='undefined')window.addEventListener('pagehide',clearPendingPrivateUploads);
 function definitiveFailure(error:unknown){
  const value=error as {status?:number;code?:string;message?:string};
@@ -14,8 +15,18 @@ function definitiveFailure(error:unknown){
 export async function submitFileForm(path:string,form:FormData,request:JsonRequest,signal?:AbortSignal){
  const file=form.get('file');if(process.env.NEXT_PUBLIC_HOSTING_PLATFORM!=='vercel'||!(file instanceof File))return request(path,{method:'POST',body:form,signal});
  if(file.size<=0||file.size>8*1024*1024)throw Error('Choose a PDF, PNG, JPEG or WebP file under 8 MB.');
- const sha256=await digest(await file.arrayBuffer()),metadata:Record<string,string>={};for(const [name,value] of form)if(name!=='file'&&name!=='uploadId'&&typeof value==='string')metadata[name]=value;
- const fingerprint=await digest(new TextEncoder().encode(JSON.stringify([path,file.name,file.type,file.size,sha256,Object.entries(metadata).sort(([a],[b])=>a.localeCompare(b))])));
+ signal?.throwIfAborted();
+ const metadata:Record<string,string>={};for(const [name,value] of form)if(name!=='file'&&name!=='uploadId'&&typeof value==='string')metadata[name]=value;
+ const sortedMetadata=Object.entries(metadata).sort(([a],[b])=>a.localeCompare(b)),preparationKey=JSON.stringify([path,sortedMetadata]);
+ let filePreparations=preparations.get(file);if(!filePreparations){filePreparations=new Map();preparations.set(file,filePreparations);}
+ const existing=filePreparations.get(preparationKey);if(existing)return existing;
+ // Share a double submit before either asynchronous checksum has finished. A File is immutable;
+ // different file objects still use the content fingerprint below for uncertain-response retries.
+ const epoch=accountEpoch,currentPreparations=filePreparations;
+ const preparation=Promise.resolve().then(async()=>{
+ const sha256=await digest(await file.arrayBuffer());
+ const fingerprint=await digest(new TextEncoder().encode(JSON.stringify([path,file.name,file.type,file.size,sha256,sortedMetadata])));
+ if(epoch!==accountEpoch)throw Error('This upload was interrupted. Choose the file again.');
  signal?.throwIfAborted();
  const now=Date.now();for(const [key,value] of pending)if(!value.flight&&value.until<=now)pending.delete(key);
  let entry=pending.get(fingerprint);if(entry?.flight)return entry.flight;
@@ -39,4 +50,8 @@ export async function submitFileForm(path:string,form:FormData,request:JsonReque
    throw error;
   }finally{current.flight=undefined;}
  });current.flight=task;return task;
+ }).finally(()=>{
+  if(currentPreparations.get(preparationKey)===preparation)currentPreparations.delete(preparationKey);
+ });
+ currentPreparations.set(preparationKey,preparation);return preparation;
 }
