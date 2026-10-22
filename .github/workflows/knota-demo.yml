@@ -1,0 +1,38 @@
+name: Check Knota demo
+on:
+  push:
+    paths:
+      - 'lib/alexa-demo*'
+      - 'components/alexa-web-demo*'
+      - 'components/knota-brand.tsx'
+      - 'app/alexa/**'
+      - 'app/api/alexa/**'
+      - 'tests/alexa-web-demo.mjs'
+      - '.github/workflows/knota-demo.yml'
+  pull_request:
+    paths:
+      - 'lib/alexa-demo*'
+      - 'components/alexa-web-demo*'
+      - 'components/knota-brand.tsx'
+      - 'app/alexa/**'
+      - 'app/api/alexa/**'
+      - 'tests/alexa-web-demo.mjs'
+      - '.github/workflows/knota-demo.yml'
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.25.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: node scripts/test.mjs alexa-web-demo backend-agent-demo-client vercel-identity
+      - run: pnpm typecheck
