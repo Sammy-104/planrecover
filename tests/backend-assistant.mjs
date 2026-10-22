@@ -7,6 +7,8 @@ import {createTestD1} from './helpers/d1.mjs';
 import {PlanRepository} from '../lib/plan-repository.ts';
 import {accountPersonId,addPerson} from '../lib/people.ts';
 import {ConversationRepository} from '../lib/conversations.ts';
+import {executeAgentTool} from '../lib/agent-tools.ts';
+import {recoveryMoney} from '../lib/agent-recovery.ts';
 const root=fileURLToPath(new URL('../',import.meta.url)),require=createRequire(import.meta.url),{build}=require(createRequire(require.resolve('vite')).resolve('esbuild'));
 const origin='https://planrecover.test',owner='assistant-alice',alice={id:await accountPersonId(owner),name:'Alice'},bob={id:await accountPersonId('assistant-bob'),name:'Bob'};
 mkdirSync(resolve(root,'build'),{recursive:true});const directory=mkdtempSync(join(root,'build','backend-assistant-'));
@@ -75,6 +77,36 @@ try{
  await check('An agent tool preview remains linked to the private conversation when later model inference fails',async({database,id})=>{
   configured();const conversation=await new ConversationRepository(database).create(owner,alice,id);let step=0;provider=async()=>step++===0?Response.json({output:{message:{role:'assistant',content:[{toolUse:{toolUseId:'prepare',name:'prepare_plan',input:{plan:plan('Retained preview')}}}]}},stopReason:'tool_use',usage:{inputTokens:30,outputTokens:10,totalTokens:40}}):new Response('fixture outage',{status:503});
   const result=await decoded(await route.POST(request({planId:id,agent:true,message:'Prepare another plan',conversationId:conversation.id,conversationVersion:conversation.version,requestId:crypto.randomUUID()})));assert.equal(result.prepared.length,1);assert.match(result.notice,/saved/);const read=await new ConversationRepository(database).read(owner,alice,conversation.id);assert.equal(read.prepared.length,1);assert.equal(read.messages.find(m=>m.role==='assistant').metadata.prepared.length,1);
+ });
+ await check('Recovery with an omitted discriminator saves one review and displays authoritative CAD amounts despite incorrect model prose',async({database,repository,id,record})=>{
+  let current=record;
+  for(const [name,price,hour,duration] of [['Hike',9000,'10',120],['Lodge',12000,'16',45],['Shuttle',3000,'09',45],['Dinner',2000,'18',75]])current=await repository.updatePlan(id,alice,current.version,{type:'add_item',name,category:'Activity',start:'2027-04-04T'+hour+':00:00-04:00',duration,price,participants:[alice.id],location:'Fictional demo estimate'});
+  const before=await repository.getPlan(id,alice),hike=before.state.items.find(item=>item.name==='Hike');
+  const change={version:before.version,itemIds:[hike.id],option:'replace',replacements:[{name:'Indoor workshop',category:'Activity',start:hike.start,duration:120,price:10500,participants:[alice.id],location:'Fictional demo estimate'}]};
+  const conversation=await new ConversationRepository(database).create(owner,alice,id),requestId=crypto.randomUUID();
+  configured();let step=0;provider=async(url,options)=>{
+   const body=JSON.parse(options.body);
+   if(step++===0){const schema=body.toolConfig.tools.find(tool=>tool.toolSpec.name==='prepare_plan_change').toolSpec.inputSchema.json;assert.deepEqual(schema.properties.change.properties.type.enum,['recovery','departure']);
+    return Response.json({output:{message:{role:'assistant',content:[{toolUse:{toolUseId:'recovery',name:'prepare_plan_change',input:{planId:id,change}}}]}},stopReason:'tool_use',usage:{inputTokens:30,outputTokens:10,totalTokens:40}});}
+   const result=body.messages.at(-1).content[0].toolResult.content[0].json;assert.equal(result.money.currency,'CAD');assert.equal(result.money.decimalPlaces,2);assert.equal(result.figures.newPaymentNow,10500);assert.match(result.money.display.newPaymentNow,/105\.00/);
+   return Response.json({output:{message:{role:'assistant',content:[{text:'The payment was sent. New cash is CAD 10,500.00 and the total is CAD 27,500.00.'}]}},stopReason:'end_turn',usage:{inputTokens:30,outputTokens:10,totalTokens:40}});
+  };
+  const result=await decoded(await route.POST(request({planId:id,agent:true,message:'Rain affects the hike. Prepare the CAD 105 indoor replacement for review.',conversationId:conversation.id,conversationVersion:conversation.version,requestId})));
+  assert.equal(result.mode,'bedrock');assert.equal(result.prepared.length,1);assert.ok(result.reply.includes(String.fromCharCode(10)));assert.match(result.reply,/Recovery proposal ready for review/);assert.match(result.reply,/CAD\s105\.00/);assert.match(result.reply,/CAD\s275\.00/);assert.match(result.reply,/CAD\s15\.00/);assert.doesNotMatch(result.reply,/10,500|27,500|payment was sent/);
+  assert.deepEqual(await repository.getPlan(id,alice),before);assert.equal(database.sqlite.prepare('SELECT COUNT(*) n FROM plan_change_approvals').get().n,0);assert.equal(database.sqlite.prepare('SELECT COUNT(*) n FROM plan_changes').get().n,1);
+  const saved=await new ConversationRepository(database).read(owner,alice,conversation.id);assert.equal(saved.messages.at(-1).text,result.reply);assert.equal(saved.prepared[0].result.changeId,result.prepared[0].result.changeId);
+  const replay=await executeAgentTool({database,repository,owner,identity:alice,boundPlanId:id,turn:{conversationId:conversation.id,requestId,conversationOwner:owner}},'prepare_plan_change',{planId:id,change:{...change,type:'recovery'}});
+  assert.equal(replay.changeId,result.prepared[0].result.changeId);assert.equal(database.sqlite.prepare('SELECT COUNT(*) n FROM plan_changes').get().n,1);
+ });
+ await check('Invalid, ambiguous, explicit execution and stale recovery inputs remain rejected',async({database,repository,id,record})=>{
+  const context={database,repository,owner,identity:alice,boundPlanId:id};
+  for(const change of [{version:record.version,memberId:alice.id},{type:'apply',version:record.version,changeId:crypto.randomUUID(),confirm:true},{type:'wrong',version:record.version,itemIds:['missing'],option:'cancel'},{version:record.version,itemIds:['missing'],option:'cancel',approve:true},{version:record.version+1,itemIds:['missing'],option:'cancel'}])await assert.rejects(executeAgentTool(context,'prepare_plan_change',{planId:id,change}));
+  assert.equal(database.sqlite.prepare('SELECT COUNT(*) n FROM plan_changes').get().n,0);assert.deepEqual(await repository.getPlan(id,alice),record);
+ });
+ await check('Money presentation honors zero-, two- and three-decimal currencies and preserves unknown and signed amounts',async()=>{
+  const figures={retained:0,expectedRefund:null,newPaymentNow:10500,finalTotal:null,perMember:{alice:-1500},memberImpacts:{alice:{expectedRefund:null,newPaymentNow:10500,finalChange:-1500}}};
+  for(const [currency,digits,display] of [['CAD',2,'105.00'],['JPY',0,'10,500'],['KWD',3,'10.500']]){const money=recoveryMoney(currency,figures);assert.equal(money.decimalPlaces,digits);assert.ok(money.display.newPaymentNow.includes(display));assert.equal(money.display.expectedRefund,'Unknown');assert.equal(money.display.finalTotal,'Unknown');assert.match(money.display.memberImpacts.alice.finalChange,/-/);}
+  assert.equal(figures.newPaymentNow,10500);assert.equal(figures.expectedRefund,null);
  });
  console.log(`${checks} authenticated assistant checks passed.`);
 }finally{rmSync(directory,{recursive:true,force:true});delete globalThis.assistantTestEnv;}
