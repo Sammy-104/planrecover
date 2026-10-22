@@ -13,6 +13,7 @@ import {BackendError,conflict,missingPlan} from '@/lib/backend-errors';
 import {loadPlanningPreferences} from '@/lib/planning-constraints';
 import {isDemoTrip} from '@/lib/model';
 import {savedToolResults} from '@/lib/agent-checkpoints';
+import {recoveryToolAnswer} from '@/lib/agent-recovery';
 // Invitation context stays read-only even when the signed-in person also has
 // editing membership outside that link. Recheck it at each agent tool boundary.
 const readOnlyAgentTools=new Set(['compare_recovery_options','get_change_status']);
@@ -86,6 +87,7 @@ export async function POST(request:Request){let conversationLease:{id:string;tok
    if(JSON.stringify(orderChanges(freshDecisions))!==JSON.stringify(orderChanges({...decisions!,changes:expectedChanges})))throw conflict();
   }
  }
+ const recoveryReply=recoveryToolAnswer(prepared,identity.id);if(recoveryReply)reply=recoveryReply;
  if(conversationLease)await conversations.finish(conversationOwner,identity,conversationLease.id,input.conversationVersion!,conversationLease.token,input.requestId!,input.message,reply,mode,{followUps,notice:notice??null,prepared,bedrockOperationId:mode==='bedrock'?bedrockOperationId??null:null,readOnly:prepared.length===0,planUnchanged:true,financialEffects:false,modelConnected:!!provider,planId:record?.state.plan.id??null,planVersion:record?.version??null},record?.version);
  if(mode==='bedrock'&&bedrockOperationId&&record){
   // Verify the durable proposal through the same authenticated repository used by its review page.
