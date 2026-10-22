@@ -16,7 +16,7 @@ export default function AlexaWebDemo(){
  async function rpc(method:string,params:Record<string,unknown>,signal:AbortSignal){
   const response=await fetch(endpoint,{method:'POST',cache:'no-store',headers:{'Content-Type':'application/json',Accept:'application/json, text/event-stream','MCP-Protocol-Version':'2025-11-25'},body:JSON.stringify({jsonrpc:'2.0',id:++sequence.current,method,params}),signal:AbortSignal.any([signal,AbortSignal.timeout(15000)])});
   if(!response.ok)throw Error('The sample recovery tools could not connect. Please try again.');
-  const data=await response.json();if(data.error)throw Error(data.error.message);return data.result;
+  const data=await response.json() as {error?:{message:string};result:any};if(data.error)throw Error(data.error.message);return data.result;
  }
  async function call(name:string,args:Record<string,unknown>,value:Context,signal:AbortSignal):Promise<ToolResult>{
   const start=performance.now(),id=++traceSequence.current,request={name,arguments:{...args,context:structuredClone(value)}};
