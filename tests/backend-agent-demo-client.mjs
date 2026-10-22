@@ -23,7 +23,7 @@ try{
  const order=messages.map(message=>message.method);assert.equal(order[0],'initialize');assert.ok(order.indexOf('notifications/initialized')<order.indexOf('tools/list'));assert.ok(order.indexOf('resources/read')<order.indexOf('tools/call'));assert.equal(messages.find(message=>message.method==='resources/read').params.uri,'planrecover://skills/planning');
  assert.deepEqual(Object.keys(events[0]).sort(),['method','status','tool']);assert.ok(events.some(event=>event.method==='tools/list'&&event.status===200));assert.equal((await repository.getPlan(record.state.plan.id,identity)).version,record.version);
  console.log('PASS SDK handshake, discovery and skill read precede concurrent authenticated tool calls; reads preserve plan');
- authorized=false;await assert.rejects(client.call('get_plan',{planId:record.state.plan.id}),/Sign in to PlanRecover/);authorized=true;
+ authorized=false;await assert.rejects(client.call('get_plan',{planId:record.state.plan.id}),/Sign in to Knota/);authorized=true;
  await assert.rejects(client.call('get_plan',{planId:'missing-plan'}));await assert.rejects(client.call('execute_payment',{}),/unavailable/);await client.close();await assert.rejects(client.call('list_plans',{}),/closed/);
  console.log('PASS expired sessions, unavailable financial tools and disposed clients are rejected');
  const retryMessages=[],retry=new AgentDemoClient(endpoint,{fetch:async(input,init)=>{

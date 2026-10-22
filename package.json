@@ -1,6 +1,6 @@
 {
-  "name": "site-creator-vinext-starter",
-  "version": "0.1.0",
+  "name": "knota",
+  "version": "0.37.0",
   "private": true,
   "engines": {
     "node": ">=24.0.0"
@@ -17,7 +17,8 @@
     "start": "node scripts/start-local.mjs",
     "test:mcp:local": "node scripts/smoke-mcp.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern .next-vercel",
-    "db:generate": "drizzle-kit generate"
+    "db:generate": "drizzle-kit generate",
+    "test:alexa": "node scripts/test.mjs alexa-web-demo"
   },
   "dependencies": {
     "@clerk/nextjs": "7.9.14",

@@ -3,8 +3,8 @@ import RuntimeIdentity from '@/components/runtime-identity';
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "PlanRecover · Your plans, connected",
-  description: "Plan together, review your shares, and recover when plans change. An interactive beta workspace.",
+  title: "Knota — Connecting people, plans and details.",
+  description: "Connecting people, plans and details. Plan together, keep everyone in sync, and recover when plans change.",
   icons: {
     icon: "/favicon.svg",
     shortcut: "/favicon.svg",

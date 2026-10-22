@@ -18,7 +18,7 @@ export class AgentDemoClient {
   connect():Promise<string[]> {
     if(this.closed)return Promise.reject(new Error('This assistant connection is closed.'));
     if(this.connection)return this.connection;
-    const client=new Client({name:'PlanRecover simulated Alexa+ client',version:'1.0.0'});
+    const client=new Client({name:'Knota simulated Alexa+ client',version:'1.0.0'});
     this.client=client;
     const send=this.options.fetch??globalThis.fetch.bind(globalThis);
     const transport=new StreamableHTTPClientTransport(this.endpoint,{
@@ -28,7 +28,7 @@ export class AgentDemoClient {
         if(typeof init?.body==='string'){try{message=JSON.parse(init.body);}catch{/* The SDK validates messages. */}}
         const response=await send(input,init);
         if(message.method)this.options.observe?.({method:message.method,tool:message.params?.name,status:response.status});
-        if(response.status===401)throw new Error('Sign in to PlanRecover to use this assistant.');
+        if(response.status===401)throw new Error('Sign in to Knota to use this assistant.');
         return response;
       },
       reconnectionOptions:{maxRetries:0,initialReconnectionDelay:1000,maxReconnectionDelay:1000,reconnectionDelayGrowFactor:1},
