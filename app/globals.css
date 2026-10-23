@@ -19,5 +19,6 @@
 @import "./styles/views/settings.css";
 @import "./styles/views/dialogs.css";
 @import "./styles/comfort.css";
+@import "./styles/knota-theme.css";
 
 .knota-brand{display:inline-flex;align-items:center;gap:11px;text-align:left}.knota-logo{width:43px;height:43px;border-radius:12px;display:grid;place-items:center;background:#6d4aff;color:white;flex-shrink:0}.knota-wordmark{font-size:28px;font-weight:750;letter-spacing:-1.2px;line-height:1.1;display:block}.knota-wordmark small{font-size:10px;font-weight:450;letter-spacing:.05px;line-height:1.45;display:block;margin-top:6px;opacity:.72}.brand>.knota-brand{flex-direction:row;align-items:center;gap:11px}.brand .knota-wordmark{display:block}.welcome-header .knota-brand{color:#191b2a}.welcome-header .knota-wordmark small{color:#666a7d}
