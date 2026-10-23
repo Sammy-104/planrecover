@@ -1,0 +1,12 @@
+/* Shared Knota palette for the main planner and the Alexa+ demo. */
+:where(.one-step, .knota-alexa) {
+  --knota-bg: #fafbfe;
+  --knota-paper: #fff;
+  --knota-ink: #303b60;
+  --knota-muted: #727d99;
+  --knota-line: #e3e7f2;
+  --knota-accent: #4b61d3;
+  --knota-soft: #eff2ff;
+  --knota-focus: #b6c1ff;
+  --knota-font: "Segoe UI", Arial, sans-serif;
+}
